@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: learning-os
+    runtime: python
+    plan: free
+    region: singapore
+    autoDeploy: false
+    buildCommand: pip install -r requirements.txt   # frontend/dist is committed (rebuild locally with npm run build)
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.1
+      - key: ADMIN_DATABASE_URL
+        sync: false
+      - key: LEARNER_DATABASE_URL
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
