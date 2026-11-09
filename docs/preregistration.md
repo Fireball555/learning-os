@@ -35,7 +35,7 @@ This is updated live during practice.
   - Score ties are broken by a random draw. Draws and flips are logged in `app.events`.
   - A no-show is excluded before assignment and logged with the reason.
   - With an odd count, the lowest-ranked learner is unpaired and gets their own coin flip.
-- Both arms use the same app, schema, context, UI and model chain (Groq, temperature 0.3: `llama-3.3-70b-versatile`, then `gpt-oss-120b`, `gpt-oss-20b`, `llama-3.1-8b-instant` when a model is rate-limited). The fallback applies to both arms at the same moment; every hint records which model wrote it, and the report shows the model mix per arm. Only the help policy differs.
+- Both arms use the same app, schema, context, UI and model chain (Groq, temperature 0.3: `openai/gpt-oss-120b`, then `openai/gpt-oss-20b`, then `qwen/qwen3.8-27b` when a model is rate-limited). The fallback applies to both arms at the same moment; every hint records which model wrote it, and the report shows the model mix per arm. Only the help policy differs.
   - **Tutor arm:** a ladder: L1 concept, L2 plan, L3 skeleton with blanks, L4 a fix pointing at the learner's own attempt. It never gives the full query; a deterministic guard enforces this.
   - **Baseline arm:** the full correct query and a short explanation, every time. It is correct by construction, and the learner gets it through the same button.
 - **Sessions:**

@@ -12,12 +12,12 @@ class Settings:
     learner_dsn = os.environ.get("LEARNER_DATABASE_URL", "")  # learner_ro: shop schema read-only
     admin_token = os.environ.get("ADMIN_TOKEN", "")
     groq_api_key = os.environ.get("GROQ_API_KEY", "")
-    groq_model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    groq_model = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
     # Fallback chain, tried in order when a model is rate-limited or unavailable.
     # Same chain for both arms; every hint row records which model wrote it.
     groq_models = [m.strip() for m in os.environ.get(
         "GROQ_MODELS",
-        f"{os.environ.get('GROQ_MODEL', 'llama-3.3-70b-versatile')},openai/gpt-oss-120b,openai/gpt-oss-20b,llama-3.1-8b-instant",
+        "openai/gpt-oss-120b,openai/gpt-oss-20b,qwen/qwen3.8-27b",
     ).split(",") if m.strip()]
     allow_origins = [o for o in os.environ.get("ALLOW_ORIGINS", "").split(",") if o]
     frontend_dist = ROOT / "frontend" / "dist"

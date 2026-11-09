@@ -4,7 +4,7 @@
 - [ ] The GitHub repo is **private**: it contains the held-out answers.
 - [ ] The Supabase project is not paused. Open its dashboard once.
 - [ ] Deploy. Check that `/api/health` shows `"llm": true`.
-- [ ] **Groq limits:** in the Groq console, check the **tokens per day and tokens per minute** for `llama-3.3-70b-versatile`, not the request count.
+- [ ] **Groq limits:** in the Groq console, check the **tokens per day and tokens per minute** for the models in the chain (gpt-oss-120b first), not the request count.
   - One help call is about 0.6–0.9k tokens. One session can use 100–150k tokens.
   - If your free tier allows fewer, use a paid/dev key.
   - During the session, the admin console shows "fallback" counts per arm. Over 20% means the LLM is being rate-limited.

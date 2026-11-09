@@ -190,6 +190,20 @@ def _context(question, last_attempt):
             f"Reference solution (for your understanding only):\n```sql\n{question['sql']}\n```\n\n{att}")
 
 
+def _model_kwargs(model):
+    """Reasoning models need room for their (hidden) reasoning plus the answer."""
+    if "gpt-oss" in model:
+        return dict(max_completion_tokens=900, reasoning_effort="low")
+    if "qwen" in model:
+        return dict(max_completion_tokens=900, reasoning_format="hidden")
+    return dict(max_tokens=300)
+
+
+def _strip_reasoning(text):
+    """Drop any <think>...</think> block a reasoning model leaves in its reply."""
+    return re.sub(r"(?is)<think>.*?</think>", "", text).strip()
+
+
 _COOLDOWN = {}          # model -> time.monotonic() until which it is skipped
 COOLDOWN_S = 120
 
@@ -205,13 +219,10 @@ def _llm(system, user):
     for model in chain:
         kw = dict(model=model, temperature=0.3,
                   messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
-        if "gpt-oss" in model:      # reasoning models: keep reasoning short, leave room for the answer
-            kw.update(max_completion_tokens=900, reasoning_effort="low")
-        else:
-            kw.update(max_tokens=300)
+        kw.update(_model_kwargs(model))
         try:
             r = client.chat.completions.create(**kw)
-            text = (r.choices[0].message.content or "").strip()
+            text = _strip_reasoning(r.choices[0].message.content or "")
             if text:
                 return text, model
             last = RuntimeError(f"{model}: empty reply")
