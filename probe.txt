@@ -1,0 +1,63 @@
+====================================================================================================
+#1 Blank page, no idea where to start
+   question T1, level 1, closeness of attempt: none
+   model: openai/gpt-oss-120b | 91 chars | verdict: OK
+----------------------------------------------------------------------------------------------------
+Use a **distinct** (or equivalent) to ensure each product appears only once after the join.
+====================================================================================================
+#2 Close: DISTINCT written like a function (1 column instead of 2)
+   question T1, level 4, closeness of attempt: close
+   grader: {'expected_rows': 19, 'got_rows': 19, 'expected_cols': 2, 'got_cols': 1, 'reason': 'column_count'}
+   model: openai/gpt-oss-120b | 207 chars | verdict: OK
+----------------------------------------------------------------------------------------------------
+The **SELECT clause** is wrong: `distinct(p.name, p.price)` is not valid syntax – `DISTINCT` applies to the whole row, not to a parenthesized list.  
+Change it to:
+
+```sql
+SELECT DISTINCT p.name, p.price
+```
+====================================================================================================
+#3 Inner join drops customers with no orders (LEFT JOIN skill)
+   question T2, level 2, closeness of attempt: close_rows
+   grader: {'expected_rows': 44, 'got_rows': 38, 'expected_cols': 3, 'got_cols': 3, 'missing_rows': 6, 'extra_rows': 0, 'has_duplicates': False, 'reason': 'rows'}
+   model: openai/gpt-oss-120b | 214 chars | verdict: OK
+----------------------------------------------------------------------------------------------------
+Use a **LEFT JOIN** instead of the inner join so that every customer row is kept even when no matching order exists; then count the order IDs (or a column from the orders side) to get zero for those without orders.
+====================================================================================================
+#4 Fan-out: joins payments and items together, counts and sums double
+   question T4, level 3, closeness of attempt: far
+   grader: {'expected_rows': 58, 'got_rows': 109, 'expected_cols': 3, 'got_cols': 3, 'missing_rows': 58, 'extra_rows': 109, 'has_duplicates': False, 'reason': 'rows'}
+   model: openai/gpt-oss-120b | 365 chars | verdict: OK
+----------------------------------------------------------------------------------------------------
+```sql
+SELECT o.order_id,
+       ___(p.payment_id)               -- count the payments per order
+FROM   shop.orders      o
+JOIN   shop.payments    p  ON ___   -- join only on matching order_id
+JOIN   shop.order_items oi ON ___   -- join only on matching order_id
+GROUP BY o.order_id
+HAVING ___ > 1                       -- keep orders with more than one payment
+```
+====================================================================================================
+#5 Anti-join done as '<>' (wrong logic, far)
+   question T8, level 1, closeness of attempt: far
+   grader: {'expected_rows': 13, 'got_rows': 38, 'expected_cols': 2, 'got_cols': 2, 'missing_rows': 6, 'extra_rows': 31, 'has_duplicates': False, 'reason': 'rows'}
+   model: openai/gpt-oss-120b | 130 chars | verdict: OK
+----------------------------------------------------------------------------------------------------
+Use an anti‑join (or NOT EXISTS) to exclude customers who have any matching row, rather than filtering with “<>” on an inner join.
+====================================================================================================
+#6 SQL error: misspelt column
+   question T5, level E, closeness of attempt: error
+   grader: column "order_dat" does not exist (hint: Perhaps you meant to reference the column "orders.order_date".)
+   model: openai/gpt-oss-120b | 563 chars | verdict: OK
+----------------------------------------------------------------------------------------------------
+The error is telling you that the column name you wrote – **`order_dat`** – isn’t found in any of the tables you’re querying. PostgreSQL looks for a column with that exact name, can’t find it, and therefore raises the “column does not exist” message.
+
+In your `SELECT` you have:
+
+```sql
+extract(month from order_dat)
+```
+
+but the column that stores the date in the **orders** table is called **`order_date`**. Just change the reference to the correct column name (you can qualify it if you like, e.g. `orders.order_date`). That small fix will eliminate the error.
+====================================================================================================

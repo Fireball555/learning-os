@@ -334,6 +334,7 @@ function Editor({ q, me, isTest, refresh, onNext }) {
   const submittedSql = (me.submitted_sql || {})[q.id]
   const status = me.status[q.id]
   const locked = isTest && status === 'submitted'
+  const solved = !isTest && status === 'solved'
   const [code, setCodeText] = useState(() => (locked && submittedSql != null ? submittedSql : loadDraft(q.id)))
   const [res, setRes] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -421,7 +422,10 @@ function Editor({ q, me, isTest, refresh, onNext }) {
               <button onClick={() => setConfirm(false)} className="btn btn-ghost">Cancel</button>
             </span>)}
         {locked && <span className="text-sm t-muted">Submitted. This is the answer you sent.</span>}
-        {me.help_available && canReveal && (!confirmReveal
+        {!isTest && (solved || res?.correct) && (
+          <button onClick={onNext} className="btn btn-primary">Next question →</button>
+        )}
+        {me.help_available && canReveal && !(solved || res?.correct) && (!confirmReveal
           ? <button onClick={() => setConfirmReveal(true)} disabled={hintBusy} className="btn btn-ghost ml-auto">Show solution</button>
           : <span className="ml-auto flex items-center gap-2 text-sm flex-wrap">
               <span>Show the full solution? This question will then count as not solved.</span>
@@ -429,8 +433,10 @@ function Editor({ q, me, isTest, refresh, onNext }) {
               <button onClick={() => setConfirmReveal(false)} className="btn btn-ghost">Keep trying</button>
             </span>)}
         {me.help_available && (
-          <button onClick={help} disabled={hintBusy} className={`btn btn-outline ${canReveal ? '' : 'ml-auto'}`}>
-            {hintBusy ? 'Thinking…' : 'Get help'}
+          <button onClick={help} disabled={hintBusy || solved || res?.correct}
+            title={solved || res?.correct ? 'Already solved' : undefined}
+            className={`btn btn-outline ${canReveal && !(solved || res?.correct) ? '' : 'ml-auto'}`}>
+            {hintBusy ? 'Thinking…' : solved || res?.correct ? 'Solved ✓' : 'Get help'}
           </button>
         )}
       </div>

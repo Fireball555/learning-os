@@ -1,0 +1,64 @@
+====================================================================================================
+#1 Blank page, no idea where to start
+   question T1, level 1, closeness of attempt: none
+   model: openai/gpt-oss-120b | 123 chars | verdict: OK
+----------------------------------------------------------------------------------------------------
+Which two columns must you compare to find products sold for less than their listed price, and where do those columns live?
+====================================================================================================
+#2 Close: DISTINCT written like a function (1 column instead of 2)
+   question T1, level 4, closeness of attempt: close
+   grader: {'expected_rows': 19, 'got_rows': 19, 'expected_cols': 2, 'got_cols': 1, 'reason': 'column_count'}
+   model: openai/gpt-oss-120b | 355 chars | verdict: OK
+----------------------------------------------------------------------------------------------------
+The problem is in the **SELECT** clause: `select distinct(p.name, p.price)`. `DISTINCT` applies to whole rows, not to a parenthesized list, so PostgreSQL treats the parentheses as a single expression and returns one column.  
+
+**Change it to:** `SELECT DISTINCT p.name, p.price` (remove the parentheses and keep the two column names separated by a comma).
+====================================================================================================
+#3 Inner join drops customers with no orders (LEFT JOIN skill)
+   question T2, level 2, closeness of attempt: close_rows
+   grader: {'expected_rows': 44, 'got_rows': 38, 'expected_cols': 3, 'got_cols': 3, 'missing_rows': 6, 'extra_rows': 0, 'has_duplicates': False, 'reason': 'rows'}
+   model: openai/gpt-oss-120b | 349 chars | verdict: OK
+----------------------------------------------------------------------------------------------------
+Use a **left (outer) join** instead of the inner join you wrote. An inner join drops customers that have no matching rows in orders, so those customers disappear from the result; a left join keeps every customer row and adds NULLs for orders when none exist, letting `COUNT` produce zero for those customers. This is why you’re missing the six rows.
+====================================================================================================
+#4 Fan-out: joins payments and items together, counts and sums double
+   question T4, level 3, closeness of attempt: far
+   grader: {'expected_rows': 58, 'got_rows': 109, 'expected_cols': 3, 'got_cols': 3, 'missing_rows': 58, 'extra_rows': 109, 'has_duplicates': False, 'reason': 'rows'}
+   model: openai/gpt-oss-120b | 466 chars | verdict: OK
+----------------------------------------------------------------------------------------------------
+You aggregate the payments and the order items together in one query, while the skeleton first computes a payment count per order in one CTE and the items total in a separate CTE before joining them.
+
+```sql
+WITH pc AS (SELECT order_id, ___(*) AS n FROM shop.payments GROUP BY order_id HAVING ___ ),
+it AS (SELECT order_id, ___(quantity * unit_price) AS total FROM shop.order_items GROUP BY order_id)
+SELECT pc.order_id, pc.n, it.total FROM pc ___ JOIN it ON ___
+```
+====================================================================================================
+#5 Anti-join done as '<>' (wrong logic, far)
+   question T8, level 1, closeness of attempt: far
+   grader: {'expected_rows': 13, 'got_rows': 38, 'expected_cols': 2, 'got_cols': 2, 'missing_rows': 6, 'extra_rows': 31, 'has_duplicates': False, 'reason': 'rows'}
+   model: openai/gpt-oss-120b | 230 chars | verdict: OK
+----------------------------------------------------------------------------------------------------
+Your query keeps customers who have at least one non‑electronics item, but it also includes anyone who ever bought an electronics product alongside other items. Which customers that bought electronics are still appearing, and why?
+====================================================================================================
+#6 SQL error: misspelt column
+   question T5, level E, closeness of attempt: error
+   grader: column "order_dat" does not exist (hint: Perhaps you meant to reference the column "orders.order_date".)
+   model: openai/gpt-oss-120b | 620 chars | verdict: OK
+----------------------------------------------------------------------------------------------------
+The error is telling you that the column name you wrote – **`order_dat`** – isn’t found in any of the tables you’re querying. PostgreSQL looks for a column with that exact name, can’t find it, and therefore raises the “column does not exist” message.
+
+In your `SELECT` clause you have:
+
+```sql
+extract(month from order_dat)
+```
+
+The correct column that stores the date of the order is **`order_date`** (and it lives in the `orders` table). Just replace the miss‑spelled name with the proper one, e.g.:
+
+```sql
+extract(month from orders.order_date)
+```
+
+That small change will eliminate the “column does not exist” error.
+====================================================================================================

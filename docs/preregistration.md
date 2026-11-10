@@ -39,7 +39,8 @@ This is updated live during practice.
 - Both arms use the same app, schema, context, UI and model chain (Groq, temperature 0.3: `openai/gpt-oss-120b`, then `openai/gpt-oss-20b`, then `qwen/qwen3.8-27b` when a model is rate-limited). The fallback applies to both arms at the same moment; every hint records which model wrote it, and the report shows the model mix per arm. Only the help policy differs.
   - **Tutor arm:** a ladder about the learner's own latest attempt: L1 concept, L2 plan, L3 skeleton with blanks, L4 the exact fix. The level is set by rules (`policy.py`) from how close the latest run is, as measured by the grader:
     - SQL error: explain the error (does not climb the ladder);
-    - **close** (right rows but wrong columns or order, or at most max(2, 20% of expected rows) wrong): straight to L4;
+    - **close** (right rows, only the columns or the order wrong): straight to L4;
+    - **a few rows wrong** (at most max(2, 20% of expected rows)): up two levels, since this is often the concept itself (e.g. inner vs left join);
     - **far**: one step up the ladder per new attempt.
     - Last resort: after L4 and 2 more failed runs, the learner may choose "Show solution". A question solved after that **does not count as solved** in practice completion; reveals are reported per learner.
     - The tutor never gives the full query otherwise; a deterministic guard enforces this.

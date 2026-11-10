@@ -11,7 +11,9 @@ Inputs (all from the database, never from the client):
   attempts_since    runs since the last hint on this question
   last_level        highest tutor level already given on this question (0 = none)
   closeness         classification of the latest run (see `closeness()`):
-                    'none' | 'error' | 'far' | 'close' | 'correct'
+                    'none' | 'error' | 'far' | 'close_rows' | 'close' | 'correct'
+                    'close'      = right rows, only the columns or the order are off (a mechanical slip)
+                    'close_rows' = only a few rows wrong (often the CONCEPT itself, e.g. inner vs left join)
   fails_after_l4    runs that were not correct since the first L4 hint on this question
 
 Tutor ladder (never reveals an executable full query; every level is about the learner's
@@ -64,7 +66,7 @@ def closeness(last_attempt) -> str:
         exp = max(1, d.get("expected_rows") or 0)
         wrong = (d.get("missing_rows") or 0) + (d.get("extra_rows") or 0)
         if wrong <= max(2, CLOSE_ROW_SHARE * exp):
-            return "close"
+            return "close_rows"
     return "far"
 
 
@@ -80,17 +82,17 @@ def decide(arm: str, mastered: bool, attempts: int, attempts_since: int, last_le
     if last_level == 0 and attempts == 0:
         if mastered:
             return Decision("gate", 0, message=GATE_MSG)
-        return Decision("hint", 2)            # skill not shown yet: start at the plan
+        return Decision("hint", 1)            # no attempt yet: always start with the lightest touch
     if last_level > 0 and attempts_since == 0:
         return Decision("repeat", last_level, message=REPEAT_MSG)
     if closeness == "error":
         # explain the error; stay at the current ladder level (errors are mechanics)
         return Decision("hint", max(1, last_level), mode="error")
-    if closeness == "close":
+    if closeness == "close":                 # right rows, wrong shape: give the exact fix
         return Decision("hint", MAX_LEVEL)
-    # far from the answer: climb one step (first hint: L1 if the skill was shown, else L2)
-    if last_level == 0:
-        return Decision("hint", 1 if mastered else 2)
+    if closeness == "close_rows":            # a few rows wrong is usually the concept itself:
+        return Decision("hint", min(MAX_LEVEL, max(2, last_level + 2)))   # speed up, but don't skip to the fix
+    # far from the answer: climb one step (first hint is L1)
     return Decision("hint", min(MAX_LEVEL, last_level + 1))
 
 

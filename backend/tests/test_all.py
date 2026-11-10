@@ -45,7 +45,7 @@ def test_policy_baseline_always_answers():
 def test_policy_gate_then_ladder():
     assert decide("tutor", True, 0, 0, 0).action == "gate"
     assert decide("tutor", True, 1, 1, 0, "far").level == 1
-    assert decide("tutor", False, 0, 0, 0).level == 2
+    assert decide("tutor", False, 0, 0, 0).level == 1
     assert decide("tutor", False, 3, 0, 2, "far").action == "repeat"
     assert decide("tutor", False, 3, 1, 2, "far").level == 3
     assert decide("tutor", False, 9, 1, 4, "far").level == 4
@@ -67,9 +67,13 @@ def test_policy_follows_closeness():
     assert closeness({"correct": True, "diff": {}}) == "correct"
     assert closeness({"diff": {"reason": "column_count"}}) == "close"
     assert closeness({"diff": {"reason": "order"}}) == "close"
-    assert closeness({"diff": {"reason": "rows", "expected_rows": 19, "missing_rows": 2, "extra_rows": 1}}) == "close"
+    assert closeness({"diff": {"reason": "rows", "expected_rows": 19, "missing_rows": 2, "extra_rows": 1}}) == "close_rows"
     assert closeness({"diff": {"reason": "rows", "expected_rows": 19, "missing_rows": 8, "extra_rows": 2}}) == "far"
-    assert closeness({"diff": {"reason": "rows", "expected_rows": 4, "missing_rows": 2, "extra_rows": 0}}) == "close"
+    assert closeness({"diff": {"reason": "rows", "expected_rows": 4, "missing_rows": 2, "extra_rows": 0}}) == "close_rows"
+    # a few rows wrong speeds up the ladder but does not jump to the fix
+    assert decide("tutor", False, 1, 1, 0, "close_rows").level == 2
+    assert decide("tutor", False, 2, 1, 1, "close_rows").level == 3
+    assert decide("tutor", False, 3, 1, 3, "close_rows").level == 4
     # reveal only after L4 + 2 failed runs, tutor only
     assert not reveal_available("tutor", 4, 1, "far")
     assert reveal_available("tutor", 4, 2, "far")
@@ -278,7 +282,7 @@ def test_tutor_llm_path_with_guard(monkeypatch):
     r = assistant.tutor_hint(q, 3, None)
     assert r["source"] == "fallback" and r["guard_blocked"] == 2 and q["sql"] not in r["text"]
     # leaks once, then clean -> retry accepted
-    calls = iter([(f"```sql\n{q['sql']}\n```", "m1"), ("Think about NOT EXISTS.", "m1")])
+    calls = iter([(f"```sql\n{q['sql']}\n```", "m1"), ("Which products never show up in any order?", "m1")])
     monkeypatch.setattr(assistant, "_llm", lambda s, u: next(calls))
     r = assistant.tutor_hint(q, 1, None)
     assert r["source"] == "llm_retry" and r["guard_blocked"] == 1
@@ -549,3 +553,20 @@ def test_close_attempt_jumps_to_fix_and_reveal_path(client, monkeypatch):
     r = client.post("/api/questions/T1/reveal", headers=k).json()
     assert "```sql" in r["text"] and not r["reveal_available"]
     assert client.post("/api/questions/T1/reveal", headers=k).status_code == 409
+
+
+def test_hint_shape_check(monkeypatch):
+    from app import assistant
+    from app.assistant import shape_problem
+    from app.main import QUESTIONS
+    long_plan = ("You'll need the delivered orders from 2025.\n**Tables**\n- `orders` gives the date.\n"
+                 "- `order_items` has quantity.\n**Join**\nJoin on `order_id`.")
+    assert shape_problem(long_plan, 1) and shape_problem(long_plan, 2)
+    assert shape_problem("Join order_items to products.", 1)            # L1 may not name columns/tables
+    assert shape_problem("Think about which rows to keep: only some orders count, from one year.", 1) is None
+    assert shape_problem("x" * 300, 1)                                   # too long for L1
+    # a too-detailed LLM reply is retried, then replaced by the deterministic hint
+    monkeypatch.setattr(assistant.settings, "groq_api_key", "x")
+    monkeypatch.setattr(assistant, "_llm", lambda s, u: (long_plan, "m1"))
+    r = assistant.tutor_hint(QUESTIONS["T5"], 1, None)
+    assert r["source"] == "fallback" and r["guard_blocked"] == 2

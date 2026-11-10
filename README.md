@@ -57,7 +57,8 @@ flowchart LR
 
 **How the ladder moves (policy v2):** every hint is about the learner's own latest query. The rules look at how close it is, as measured by the grader:
 - SQL error: explain the error.
-- Close (right rows but wrong columns or order, or only a few rows off): straight to L4.
+- Close (right rows, only the columns or order wrong): straight to L4.
+- A few rows off: up two levels. This is often the concept itself, such as an inner join where a left join is needed.
 - Far: one step up per new attempt.
 
 If the learner has already shown a skill unaided, they must try once first. Asking again without trying repeats the last hint. After L4 and 2 more failed runs, the learner may choose **Show solution**, which is logged, and that question then doesn't count as solved.
