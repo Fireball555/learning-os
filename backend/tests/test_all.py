@@ -44,11 +44,37 @@ def test_policy_baseline_always_answers():
 
 def test_policy_gate_then_ladder():
     assert decide("tutor", True, 0, 0, 0).action == "gate"
-    assert decide("tutor", True, 1, 1, 0).level == 1
+    assert decide("tutor", True, 1, 1, 0, "far").level == 1
     assert decide("tutor", False, 0, 0, 0).level == 2
-    assert decide("tutor", False, 3, 0, 2).action == "repeat"
-    assert decide("tutor", False, 3, 1, 2).level == 3
-    assert decide("tutor", False, 9, 1, 4).level == 4
+    assert decide("tutor", False, 3, 0, 2, "far").action == "repeat"
+    assert decide("tutor", False, 3, 1, 2, "far").level == 3
+    assert decide("tutor", False, 9, 1, 4, "far").level == 4
+
+
+def test_policy_follows_closeness():
+    from app.policy import closeness, reveal_available
+    # close -> straight to L4, even as the first hint
+    assert decide("tutor", False, 1, 1, 0, "close").level == 4
+    assert decide("tutor", True, 2, 1, 1, "close").level == 4
+    # SQL error -> explain the error, do not climb
+    d = decide("tutor", False, 2, 1, 2, "error")
+    assert d.mode == "error" and d.level == 2
+    # already correct -> no hint
+    assert decide("tutor", False, 2, 1, 2, "correct").action == "solved"
+    # closeness classification
+    assert closeness(None) == "none"
+    assert closeness({"error": "syntax error"}) == "error"
+    assert closeness({"correct": True, "diff": {}}) == "correct"
+    assert closeness({"diff": {"reason": "column_count"}}) == "close"
+    assert closeness({"diff": {"reason": "order"}}) == "close"
+    assert closeness({"diff": {"reason": "rows", "expected_rows": 19, "missing_rows": 2, "extra_rows": 1}}) == "close"
+    assert closeness({"diff": {"reason": "rows", "expected_rows": 19, "missing_rows": 8, "extra_rows": 2}}) == "far"
+    assert closeness({"diff": {"reason": "rows", "expected_rows": 4, "missing_rows": 2, "extra_rows": 0}}) == "close"
+    # reveal only after L4 + 2 failed runs, tutor only
+    assert not reveal_available("tutor", 4, 1, "far")
+    assert reveal_available("tutor", 4, 2, "far")
+    assert not reveal_available("tutor", 3, 5, "far")
+    assert not reveal_available("baseline", 4, 5, "far")
 
 
 # ---------------- sandbox security
@@ -209,7 +235,7 @@ def test_full_flow(client, monkeypatch):
     for l in ls:
         k = l["code"]
         r = client.post("/api/questions/T4/help", headers=H(k)).json()
-        assert set(r) == {"text"}          # nothing in the response reveals the arm
+        assert set(r) == {"text", "reveal_available"}   # same keys for both arms: nothing reveals the arm
         if l["arm"] == "baseline":
             assert "```sql" in r["text"]
         else:
@@ -340,7 +366,7 @@ def test_mastery_updates_from_practice(client, monkeypatch):
     # solve T2 (S2) unaided -> T7 (S2) now counts as mastered -> first help is the gate
     assert client.post("/api/questions/T2/run", json={"sql": QUESTIONS["T2"]["sql"]}, headers=H(c["code"])).json()["correct"]
     assert client.post("/api/questions/T7/help", headers=H(c["code"])).json()["text"].startswith("Try one attempt")
-    assert len(client.get("/api/questions/T3/hints", headers=H(c["code"])).json()) == 1
+    assert len(client.get("/api/questions/T3/hints", headers=H(c["code"])).json()["hints"]) == 1
 
 
 @needs_db
@@ -469,3 +495,57 @@ def test_model_fallback_chain(monkeypatch):
     assert assistant._llm("s", "u") == ("a hint", "small")   # rate-limited models are skipped while cooling down
     assert calls == ["small"]
     assistant._COOLDOWN.clear()
+
+
+def test_solo_arrivals_are_balanced(client, monkeypatch):
+    from app.config import settings as s
+    monkeypatch.setattr(s, "admin_token", "t")
+    A = {"x-admin-token": "t"}
+    H = lambda k: {"Authorization": "Bearer " + k}
+    for name in ("solo1", "solo2", "solo3", "solo4"):
+        c = client.post("/api/admin/learners", json={"names": [name]}, headers=A).json()[0]
+        start_all(client, A)
+        for q in client.get("/api/me", headers=H(c["code"])).json()["questions"]:
+            client.post(f"/api/questions/{q['id']}/submit", json={"sql": ""}, headers=H(c["code"]))
+        assert client.post("/api/admin/assign", headers=A).status_code == 200
+    ls = client.get("/api/admin/learners", headers=A).json()
+    assert sorted(x["arm"] for x in ls) == ["baseline", "baseline", "tutor", "tutor"]
+    for p in {x["pair_no"] for x in ls}:
+        assert p is not None
+        assert sorted(x["arm"] for x in ls if x["pair_no"] == p) == ["baseline", "tutor"]
+
+
+def test_close_attempt_jumps_to_fix_and_reveal_path(client, monkeypatch):
+    from app import db
+    from app.config import settings as s
+    monkeypatch.setattr(s, "admin_token", "t")
+    monkeypatch.setattr(s, "groq_api_key", "")
+    A = {"x-admin-token": "t"}
+    H = lambda k: {"Authorization": "Bearer " + k}
+    c = client.post("/api/admin/learners", json={"names": ["P"], "pilot": True}, headers=A).json()[0]
+    start_all(client, A)
+    lid = client.get("/api/admin/learners", headers=A).json()[0]["learner_id"]
+    for q in client.get("/api/me", headers=H(c["code"])).json()["questions"]:
+        client.post(f"/api/questions/{q['id']}/submit", json={"sql": ""}, headers=H(c["code"]))
+    client.post("/api/admin/arm", json={"learner_id": lid, "arm": "tutor"}, headers=A)
+    client.post("/api/admin/phase", json={"learner_ids": [lid], "phase": "practice"}, headers=A)
+    k = H(c["code"])
+    # the exact mistake from the live try-out: DISTINCT(a, b) -> one column
+    bad = "select distinct(p.name, p.price) from products p join order_items o on o.product_id = p.product_id where o.unit_price < p.price"
+    client.post("/api/questions/T1/run", json={"sql": bad}, headers=k)
+    r = client.post("/api/questions/T1/help", headers=k).json()
+    assert db.q1("SELECT level FROM app.hints ORDER BY hint_id DESC LIMIT 1")["level"] == 4
+    assert not r["reveal_available"]
+    # SQL error -> error explanation
+    client.post("/api/questions/T2/run", json={"sql": "select nme from customers"}, headers=k)
+    r = client.post("/api/questions/T2/help", headers=k).json()
+    assert "error" in r["text"].lower()
+    assert db.q1("SELECT source FROM app.hints ORDER BY hint_id DESC LIMIT 1")["source"].endswith("_error")
+    # reveal: 409 before allowed; after L4 + 2 failed runs it is offered and works
+    assert client.post("/api/questions/T1/reveal", headers=k).status_code == 409
+    client.post("/api/questions/T1/run", json={"sql": bad}, headers=k)
+    client.post("/api/questions/T1/run", json={"sql": bad}, headers=k)
+    assert client.get("/api/questions/T1/hints", headers=k).json()["reveal_available"]
+    r = client.post("/api/questions/T1/reveal", headers=k).json()
+    assert "```sql" in r["text"] and not r["reveal_available"]
+    assert client.post("/api/questions/T1/reveal", headers=k).status_code == 409

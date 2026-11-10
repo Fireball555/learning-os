@@ -55,7 +55,12 @@ flowchart LR
 - **L3 skeleton:** the query's shape with `___` blanks.
 - **L4 fix:** points at what's wrong in the learner's own attempt.
 
-**How the ladder moves:** if the learner has already shown a skill unaided, the tutor asks them to try once before it helps. The level only rises after a new attempt. Asking again without trying repeats the last hint.
+**How the ladder moves (policy v2):** every hint is about the learner's own latest query. The rules look at how close it is, as measured by the grader:
+- SQL error: explain the error.
+- Close (right rows but wrong columns or order, or only a few rows off): straight to L4.
+- Far: one step up per new attempt.
+
+If the learner has already shown a skill unaided, they must try once first. Asking again without trying repeats the last hint. After L4 and 2 more failed runs, the learner may choose **Show solution**, which is logged, and that question then doesn't count as solved.
 
 **Rules enforced on the server, not the UI:**
 - A learner only ever receives the questions of their current phase.

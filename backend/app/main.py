@@ -25,7 +25,7 @@ from . import db
 from .assistant import SCHEMA_NOTES, baseline_answer, tutor_hint
 from .config import settings
 from .grader import compare, describe
-from .policy import decide
+from .policy import REVEAL_LEVEL, closeness, decide, reveal_available
 from .sandbox import MAX_DISPLAY, InfraError, SandboxError, run_query
 
 QUESTIONS = {q["id"]: q for q in json.loads(settings.questions_json.read_text())}
@@ -311,13 +311,45 @@ def _mastered(lid, q):
                                            AND h.created_at <= v.finished_at), 0) <= 1""", (lid, same)))
 
 
+def _help_state(L, q):
+    """Everything the policy needs, read from the database (never from the client)."""
+    lid, qid = L["learner_id"], q["id"]
+    attempts = db.q1("SELECT count(*) n FROM app.attempts WHERE learner_id=%s AND question_id=%s AND kind='run'",
+                     (lid, qid))["n"]
+    last = db.q1("""SELECT level, created_at, text FROM app.hints WHERE learner_id=%s AND question_id=%s
+                    AND level BETWEEN 1 AND 4 ORDER BY level DESC, created_at DESC LIMIT 1""", (lid, qid))
+    last_level = last["level"] if last else 0
+    since = attempts if not last else db.q1(
+        """SELECT count(*) n FROM app.attempts WHERE learner_id=%s AND question_id=%s AND kind='run'
+           AND created_at > (SELECT max(created_at) FROM app.hints WHERE learner_id=%s AND question_id=%s
+                             AND level BETWEEN 1 AND 4)""", (lid, qid, lid, qid))["n"]
+    fails_after_l4 = db.q1(
+        """SELECT count(*) n FROM app.attempts WHERE learner_id=%s AND question_id=%s AND kind='run'
+           AND NOT correct AND created_at > (SELECT min(created_at) FROM app.hints
+                                             WHERE learner_id=%s AND question_id=%s AND level = 4)""",
+        (lid, qid, lid, qid))["n"]
+    last_attempt = db.q1("""SELECT sql_text, error, diff, correct FROM app.attempts WHERE learner_id=%s
+                            AND question_id=%s AND kind='run' ORDER BY created_at DESC LIMIT 1""", (lid, qid))
+    revealed = bool(db.q1("SELECT 1 FROM app.hints WHERE learner_id=%s AND question_id=%s AND source='reveal'",
+                          (lid, qid)))
+    return dict(attempts=attempts, last=last, last_level=last_level, since=since,
+                fails_after_l4=fails_after_l4, last_attempt=last_attempt,
+                closeness=closeness(last_attempt), revealed=revealed)
+
+
+def _can_reveal(L, st):
+    return (not st["revealed"]) and reveal_available(L["arm"], st["last_level"], st["fails_after_l4"], st["closeness"])
+
+
 @app.get("/api/questions/{qid}/hints")
 def hints(qid: str, L=Depends(learner)):
     if L["phase"] != "practice":
         raise HTTPException(404, "Not found")
-    question_for(L, qid)
-    return [{"text": h["text"]} for h in db.q(
-        "SELECT text FROM app.hints WHERE learner_id=%s AND question_id=%s ORDER BY hint_id", (L["learner_id"], qid))]
+    q = question_for(L, qid)
+    rows = db.q("SELECT text FROM app.hints WHERE learner_id=%s AND question_id=%s ORDER BY hint_id",
+                (L["learner_id"], qid))
+    can = _can_reveal(L, _help_state(L, q)) if L["arm"] in ("tutor", "baseline") else False
+    return {"hints": [{"text": h["text"]} for h in rows], "reveal_available": can}
 
 
 @app.post("/api/questions/{qid}/help")
@@ -330,32 +362,44 @@ def help_(qid: str, L=Depends(learner)):
         raise HTTPException(409, "Help isn't switched on for you yet. Ask the invigilator.")
     lid = L["learner_id"]
     mastered = _mastered(lid, q)
-    attempts = db.q1("SELECT count(*) n FROM app.attempts WHERE learner_id=%s AND question_id=%s AND kind='run'",
-                     (lid, qid))["n"]
-    last = db.q1("""SELECT level, created_at, text FROM app.hints WHERE learner_id=%s AND question_id=%s
-                    AND level BETWEEN 1 AND 4 ORDER BY level DESC, created_at DESC LIMIT 1""", (lid, qid))
-    last_level = last["level"] if last else 0
-    since = attempts if not last else db.q1(
-        """SELECT count(*) n FROM app.attempts WHERE learner_id=%s AND question_id=%s AND kind='run'
-           AND created_at > (SELECT max(created_at) FROM app.hints WHERE learner_id=%s AND question_id=%s
-                             AND level BETWEEN 1 AND 4)""", (lid, qid, lid, qid))["n"]
-    d = decide(L["arm"], mastered, attempts, since, last_level)
-    last_attempt = db.q1("""SELECT sql_text, error, diff FROM app.attempts WHERE learner_id=%s AND question_id=%s
-                            AND kind='run' ORDER BY created_at DESC LIMIT 1""", (lid, qid))
-    if d.action == "gate":
-        r = dict(text=d.message, source="gate", guard_blocked=0, model=None, latency_ms=0)
+    st = _help_state(L, q)
+    d = decide(L["arm"], mastered, st["attempts"], st["since"], st["last_level"],
+               st["closeness"], st["fails_after_l4"])
+    if d.action in ("gate", "solved"):
+        r = dict(text=d.message, source=d.action, guard_blocked=0, model=None, latency_ms=0)
     elif d.action == "repeat":
-        r = dict(text=d.message + "\n\n" + last["text"], source="repeat",
+        r = dict(text=d.message + "\n\n" + st["last"]["text"], source="repeat",
                  guard_blocked=0, model=None, latency_ms=0)
     elif d.action == "answer":
-        r = baseline_answer(q, last_attempt)
+        r = baseline_answer(q, st["last_attempt"])
     else:
-        r = tutor_hint(q, d.level, last_attempt)
+        r = tutor_hint(q, d.level, st["last_attempt"], mode=d.mode)
+    stored = {"hint": d.level, "answer": d.level, "gate": 0, "repeat": -1, "solved": -2}[d.action]
     db.ex("""INSERT INTO app.hints (learner_id, question_id, arm, level, attempts_before, mastered, text, source,
              guard_blocked, model, latency_ms) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-          (lid, qid, L["arm"], d.level if d.action in ("hint", "answer") else (0 if d.action == "gate" else -1),
-           attempts, mastered, r["text"], r["source"], r["guard_blocked"], r["model"], r["latency_ms"]))
-    return {"text": r["text"]}
+          (lid, qid, L["arm"], stored, st["attempts"], mastered, r["text"],
+           r["source"] if d.mode == "normal" else r["source"] + "_error",
+           r["guard_blocked"], r["model"], r["latency_ms"]))
+    st2 = _help_state(L, q)
+    return {"text": r["text"], "reveal_available": _can_reveal(L, st2)}
+
+
+@app.post("/api/questions/{qid}/reveal")
+def reveal(qid: str, L=Depends(learner)):
+    """Tutor arm, last resort: only after L4 and REVEAL_AFTER more failed runs, and only when the
+    learner chooses it. Logged as source='reveal'; a revealed question does not count as solved."""
+    if L["phase"] != "practice":
+        raise HTTPException(404, "Not found")
+    q = question_for(L, qid)
+    check_time(L, grace=5)
+    st = _help_state(L, q)
+    if not _can_reveal(L, st):
+        raise HTTPException(409, "Not available yet. Keep trying with the hints.")
+    text = f"Here is a query that answers it:\n```sql\n{q['sql']}\n```\nCompare it with your attempt, line by line."
+    db.ex("""INSERT INTO app.hints (learner_id, question_id, arm, level, attempts_before, mastered, text, source,
+             guard_blocked, model, latency_ms) VALUES (%s,%s,%s,%s,%s,%s,%s,'reveal',0,NULL,0)""",
+          (L["learner_id"], qid, L["arm"], REVEAL_LEVEL, st["attempts"], None, text))
+    return {"text": text, "reveal_available": False}
 
 
 class SurveyIn(BaseModel):
@@ -472,10 +516,25 @@ def assign_arms(_=Depends(admin)):
                         "scores": [a["pretest_score"], b["pretest_score"]], "flip": flip})
         if len(rows) % 2:
             odd = rows[-1]
-            arm = "tutor" if secrets.randbelow(2) == 0 else "baseline"
-            c.execute("UPDATE app.learners SET arm=%s, pair_no=NULL WHERE learner_id=%s AND arm IS NULL",
-                      (arm, odd["learner_id"]))
-            log.append({"pair": None, arm: odd["learner_id"], "scores": [odd["pretest_score"]], "unpaired": True})
+            # Learners arriving one at a time: if an earlier solo learner is still unpaired, this one
+            # gets the OPPOSITE arm and the two become a pair (randomised in blocks of two).
+            # Otherwise a coin flip, and this learner waits unpaired for the next solo arrival.
+            waiting = c.execute("""SELECT learner_id, arm FROM app.learners WHERE arm IS NOT NULL AND pair_no IS NULL
+                                   AND NOT is_pilot AND NOT excluded ORDER BY learner_id LIMIT 1""").fetchone()
+            if waiting:
+                arm = "baseline" if waiting["arm"] == "tutor" else "tutor"
+                pair = next_pair + len(rows) // 2
+                c.execute("UPDATE app.learners SET arm=%s, pair_no=%s WHERE learner_id=%s AND arm IS NULL",
+                          (arm, pair, odd["learner_id"]))
+                c.execute("UPDATE app.learners SET pair_no=%s WHERE learner_id=%s", (pair, waiting["learner_id"]))
+                log.append({"pair": pair, arm: odd["learner_id"],
+                            ("tutor" if arm == "baseline" else "baseline"): waiting["learner_id"],
+                            "scores": [odd["pretest_score"]], "completes_earlier_solo": True})
+            else:
+                arm = "tutor" if secrets.randbelow(2) == 0 else "baseline"
+                c.execute("UPDATE app.learners SET arm=%s, pair_no=NULL WHERE learner_id=%s AND arm IS NULL",
+                          (arm, odd["learner_id"]))
+                log.append({"pair": None, arm: odd["learner_id"], "scores": [odd["pretest_score"]], "unpaired": True})
         c.execute("INSERT INTO app.events (kind, payload) VALUES ('assign', %s)",
                   (db.J({"pairs": log, "tiebreak": {str(k): v for k, v in tiebreak.items()},
                          "at": datetime.now(timezone.utc).isoformat()}),))

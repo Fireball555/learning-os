@@ -33,22 +33,33 @@ SCHEMA_NOTES = [
 ]
 
 LEVEL_INSTRUCTIONS = {
-    1: ("Give a CONCEPT hint: in 1-2 sentences name the SQL idea or pattern this question needs "
-        "(e.g. which kind of join, or a trap to watch for). Do NOT mention specific table or column names. No SQL."),
-    2: ("Give a PLAN hint: in 2-4 short sentences say which tables are involved, which join type to use, "
-        "which keys to join on, and what to filter/group by. Plain words only. Do NOT write any SQL code."),
-    3: ("Give a SKELETON hint: show the shape of the query as SQL with the key parts replaced by ___ blanks "
-        "(at least the join condition, the filter and the aggregate must be blanks). "
+    1: ("CONCEPT hint. If there is a latest attempt, start from it: say in 1-2 sentences which SQL idea it is "
+        "missing or getting wrong (e.g. 'your join is fine, the problem is how DISTINCT works', 'an inner join drops "
+        "the rows you need'). If there is no attempt, name the idea the question needs. "
+        "Do NOT name specific tables or columns. No SQL."),
+    2: ("PLAN hint. If there is a latest attempt, point to the clause that is wrong and explain WHY it is wrong "
+        "in 2-4 short sentences, then say in words what that part should do. If there is no attempt, say which "
+        "tables, join type, keys and filter/grouping the query needs. Plain words; do NOT write SQL code."),
+    3: ("SKELETON hint. Show the shape of the query as SQL, built around the learner's own attempt when there is "
+        "one, with the part they got wrong (and the join condition, filter and aggregate) replaced by ___ blanks. "
         "The skeleton must NOT run as-is. Add one sentence on what goes in the blanks. Never give the complete query."),
-    4: ("Give a FIX hint: look at the learner's latest attempt and the grader feedback. Point to the specific "
-        "clause that is wrong and explain why in 2-3 sentences. You may quote the learner's own wrong line. "
+    4: ("FIX hint. Look at the learner's latest attempt and the grader feedback. Name the exact clause that is "
+        "wrong, explain why in 1-2 sentences, and say precisely what to change (you may quote their own wrong "
+        "fragment and describe the replacement in words or as a small fragment). "
         "Do NOT write the corrected full query."),
 }
+
+ERROR_INSTRUCTION = ("ERROR hint. The learner's latest attempt failed with the SQL error shown. Explain in plain words "
+                     "what the error means and which part of their query causes it, and how to fix that part "
+                     "(a small fragment is fine). Do NOT write the full query or solve the rest of the question.")
+
 
 TUTOR_SYSTEM = """You are a SQL tutor helping a student learn multi-table SQL on PostgreSQL.
 Your goal is that the student can solve such questions alone later, so you give only the help asked for.
 NEVER write a complete working query that answers the question. Be brief, friendly and concrete.
-The reference solution is given for YOUR understanding only; never copy or paraphrase it into SQL."""
+The reference solution is given for YOUR understanding only; never copy or paraphrase it into SQL.
+Always talk about the learner's OWN latest attempt when there is one: what is right, what is wrong.
+Use plain text. You may use **bold** and `inline code` sparingly. No headings."""
 
 BASELINE_SYSTEM = """You are a helpful SQL assistant for PostgreSQL.
 When the student asks for help, give the complete working query that answers the question in a ```sql code block,
@@ -232,8 +243,12 @@ def _llm(system, user):
     raise last or RuntimeError("no model available")
 
 
-def deterministic_hint(question, level, last_attempt):
+def deterministic_hint(question, level, last_attempt, mode="normal"):
     """Fallback used when the LLM is unavailable or its reply was blocked. Same ladder."""
+    if mode == "error" and last_attempt and last_attempt.get("error"):
+        return (f"Your query stopped with this error:\n\n{last_attempt['error']}\n\n"
+                "Read it word by word: it names the part of your query that the database could not understand "
+                "(a misspelt column or table, a missing comma, or a bracket in the wrong place). Fix that part and run again.")
     if level <= 2:
         return FALLBACK[question["skill"]][level]
     if level == 3:
@@ -245,15 +260,16 @@ def deterministic_hint(question, level, last_attempt):
             + "\n\nCompare it with the shape:\n```sql\n" + skeleton(question) + "\n```")
 
 
-def tutor_hint(question, level, last_attempt):
+def tutor_hint(question, level, last_attempt, mode="normal"):
     """Return dict(text, source, guard_blocked, model, latency_ms)."""
     t0 = time.perf_counter()
     blocked = 0
-    fallback = deterministic_hint(question, level, last_attempt)
+    fallback = deterministic_hint(question, level, last_attempt, mode)
     if not settings.groq_api_key:
         return dict(text=fallback, source="fallback", guard_blocked=0, model=None,
                     latency_ms=int((time.perf_counter() - t0) * 1000))
-    user = _context(question, last_attempt) + f"\n\nTASK: {LEVEL_INSTRUCTIONS[level]}"
+    task = ERROR_INSTRUCTION if mode == "error" else LEVEL_INSTRUCTIONS[level]
+    user = _context(question, last_attempt) + f"\n\nTASK: {task}"
     for attempt, src in ((0, "llm"), (1, "llm_retry")):
         try:
             prompt = user if attempt == 0 else user + (

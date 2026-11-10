@@ -33,7 +33,13 @@
   4. Email the output to 100x or a mentor.
 - [ ] Confirm both dates with all 6 learners: **11 Nov** and **13 Nov**.
 
-## 11 Nov: Pretest + Practice (about 75 min)
+## If learners can't all come at once
+- Run them **in pairs** where possible: two people do pretest + practice in one sitting, then press **Assign** (they are paired and coin-flipped).
+- A person who comes **alone**: Assign gives a coin flip; the **next** solo person automatically gets the other arm and becomes their pair.
+- Each person's final test is **at least 2 days after their own practice**. The last practice must be by **12 Nov**.
+- Tell everyone: "Please don't discuss the questions with anyone until 14 Nov." Staggered sessions make leaks more likely, so ask the self-report question before every final test.
+
+## Session 1: Pretest + Practice (about 65 min)
 1. Open the site 5 minutes early to wake the server.
 2. Seat people so you can split them into two groups later. Hand out the slips.
 3. Learners log in and see "Please wait". Say, then select all and press **pretest**, which starts the 15-minute clock:
@@ -51,7 +57,7 @@
 9. Say: "Please don't practise SQL joins or discuss today's questions before Thursday."
 10. Everyone clicks **Log out**.
 
-## 13 Nov: Removal test (about 30 min)
+## Session 2: Removal test (about 30 min, ≥ 2 days after that person's practice)
 1. Wake the server 5 minutes early.
 2. Hand out a paper slip with 3 yes/no questions. Since Tuesday, did you:
    - practise joins?

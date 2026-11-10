@@ -68,8 +68,11 @@ def main():
         runs = [x for x in d["attempts"] if x["learner_id"] == lid and x["kind"] == "run" and x["phase"] == "practice"]
         hints = [h for h in d["hints"] if h["learner_id"] == lid]
         real_help = [h for h in hints if h["level"] >= 1]           # excludes gate (0) and repeat (-1)
-        levels = [h["level"] for h in real_help if h["level"] <= 4]
-        solved = [q for q in practice_ids if views.get(q, {}).get("final_correct")]
+        levels = [h["level"] for h in real_help if h["level"] <= 4 and not h["source"].endswith("_error")]
+        revealed = {h["question_id"]: h["created_at"] for h in hints if h["source"] == "reveal"}
+        # pre-registered: a question solved only after "Show solution" does not count as solved
+        solved = [q for q in practice_ids if views.get(q, {}).get("final_correct")
+                  and not (q in revealed and ts(revealed[q]) <= ts(views[q]["finished_at"]))]
         first_help = {}
         for h in hints:
             first_help.setdefault(h["question_id"], h["created_at"])
@@ -94,6 +97,7 @@ def main():
             "practice_attempted_8": len({x["question_id"] for x in runs}),
             "solved_before_help_8": len(solved_unaided),
             "help_requests": len(real_help),
+            "revealed": len(revealed),
             "gates_repeats": len(hints) - len(real_help),
             "max_level": "full answer" if l["arm"] == "baseline" else (max(levels) if levels else 0),
             "mean_level": "full answer" if l["arm"] == "baseline" else (round(st.mean(levels), 2) if levels else 0),

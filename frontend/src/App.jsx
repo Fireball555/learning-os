@@ -340,6 +340,8 @@ function Editor({ q, me, isTest, refresh, onNext }) {
   const [confirm, setConfirm] = useState(false)
   const [hints, setHints] = useState([])
   const [hintBusy, setHintBusy] = useState(false)
+  const [canReveal, setCanReveal] = useState(false)
+  const [confirmReveal, setConfirmReveal] = useState(false)
   const codeRef = useRef(code)
   codeRef.current = code
   const runRef = useRef(null)
@@ -348,7 +350,7 @@ function Editor({ q, me, isTest, refresh, onNext }) {
   useEffect(() => { api(`/questions/${q.id}/view`, { method: 'POST' }).catch(() => {}) }, [q.id])
   useEffect(() => {
     if (!me.help_available) return
-    api(`/questions/${q.id}/hints`).then(setHints).catch(() => {})
+    api(`/questions/${q.id}/hints`).then((d) => { setHints(d.hints); setCanReveal(d.reveal_available) }).catch(() => {})
   }, [q.id, me.help_available])
   useEffect(() => { hintEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }) }, [hints.length])
   useEffect(() => {   // Ctrl/Cmd+Enter runs the query even when focus is outside the editor
@@ -380,9 +382,16 @@ function Editor({ q, me, isTest, refresh, onNext }) {
     setBusy(false); setConfirm(false)
   }
 
+  const reveal = async () => {
+    setHintBusy(true); setConfirmReveal(false)
+    try { const h = await api(`/questions/${q.id}/reveal`, { method: 'POST' }); setHints((x) => [...x, { text: h.text }]); setCanReveal(false) }
+    catch (e) { setHints((x) => [...x, { text: friendly(e), error: true }]) }
+    setHintBusy(false)
+  }
+
   const help = async () => {
     setHintBusy(true)
-    try { const h = await api(`/questions/${q.id}/help`, { method: 'POST' }); setHints((x) => [...x, h]) }
+    try { const h = await api(`/questions/${q.id}/help`, { method: 'POST' }); setHints((x) => [...x, { text: h.text }]); setCanReveal(h.reveal_available) }
     catch (e) { setHints((x) => [...x, { text: friendly(e), error: true }]) }
     setHintBusy(false)
   }
@@ -412,8 +421,15 @@ function Editor({ q, me, isTest, refresh, onNext }) {
               <button onClick={() => setConfirm(false)} className="btn btn-ghost">Cancel</button>
             </span>)}
         {locked && <span className="text-sm t-muted">Submitted. This is the answer you sent.</span>}
+        {me.help_available && canReveal && (!confirmReveal
+          ? <button onClick={() => setConfirmReveal(true)} disabled={hintBusy} className="btn btn-ghost ml-auto">Show solution</button>
+          : <span className="ml-auto flex items-center gap-2 text-sm flex-wrap">
+              <span>Show the full solution? This question will then count as not solved.</span>
+              <button onClick={reveal} className="btn btn-primary">Show it</button>
+              <button onClick={() => setConfirmReveal(false)} className="btn btn-ghost">Keep trying</button>
+            </span>)}
         {me.help_available && (
-          <button onClick={help} disabled={hintBusy} className="btn btn-outline ml-auto">
+          <button onClick={help} disabled={hintBusy} className={`btn btn-outline ${canReveal ? '' : 'ml-auto'}`}>
             {hintBusy ? 'Thinking…' : 'Get help'}
           </button>
         )}
@@ -436,11 +452,21 @@ function Editor({ q, me, isTest, refresh, onNext }) {
   )
 }
 
+// **bold** and `inline code`, rendered safely (no HTML from the model ever reaches the DOM)
+function Inline({ text }) {
+  const parts = text.split(/(\*\*[^*\n]+\*\*|`[^`\n]+`)/g)
+  return parts.map((p, i) => {
+    if (p.startsWith('**') && p.endsWith('**') && p.length > 4) return <strong key={i}>{p.slice(2, -2)}</strong>
+    if (p.startsWith('`') && p.endsWith('`') && p.length > 2) return <code key={i} className="f-mono chip px-1 rad text-[0.92em]">{p.slice(1, -1)}</code>
+    return p
+  })
+}
+
 function Rich({ text }) {
   const parts = text.split(/```[A-Za-z0-9_+-]*[ \t]*\n?([\s\S]*?)```/g)
   return parts.map((p, i) => i % 2
     ? <CodeBlock key={i} code={p.trim()} />
-    : <span key={i} className="whitespace-pre-wrap">{p}</span>)
+    : <span key={i} className="whitespace-pre-wrap"><Inline text={p} /></span>)
 }
 
 function CodeBlock({ code }) {
