@@ -165,6 +165,8 @@ def me(L=Depends(learner)):
         subs = {a["question_id"]: a["sql_text"] for a in db.q(
             "SELECT question_id, sql_text FROM app.attempts WHERE learner_id=%s AND kind='submit'",
             (L["learner_id"],))}
+    revealed = set() if L["phase"] in TEST_PHASES else {r["question_id"] for r in db.q(
+        "SELECT DISTINCT question_id FROM app.hints WHERE learner_id=%s AND source='reveal'", (L["learner_id"],))}
     for q in qs:
         v = views.get(q["id"])
         if L["phase"] in TEST_PHASES:
@@ -172,7 +174,10 @@ def me(L=Depends(learner)):
             if q["id"] in subs:
                 submitted[q["id"]] = subs[q["id"]]
         else:
-            status[q["id"]] = "solved" if v and v["final_correct"] else ("seen" if v else "new")
+            st = "solved" if v and v["final_correct"] else ("seen" if v else "new")
+            if st == "solved" and q["id"] in revealed:
+                st = "revealed"           # solved only after "Show solution": not counted as solved
+            status[q["id"]] = st
     survey_done = bool(db.q1("SELECT 1 FROM app.survey WHERE learner_id=%s AND item='return'",
                              (L["learner_id"],)))
     return {"name": L["display_name"], "phase": L["phase"],
@@ -261,6 +266,7 @@ def run(qid: str, body: SqlIn, L=Depends(learner)):
             db.ex("""UPDATE app.question_views SET final_correct = TRUE,
                      finished_at = COALESCE(finished_at, now())
                      WHERE learner_id=%s AND question_id=%s""", (L["learner_id"], qid))
+        out["reveal_available"] = False if ok else _can_reveal(L, _help_state(L, q))
     return out
 
 
@@ -316,9 +322,12 @@ def _help_state(L, q):
     lid, qid = L["learner_id"], q["id"]
     attempts = db.q1("SELECT count(*) n FROM app.attempts WHERE learner_id=%s AND question_id=%s AND kind='run'",
                      (lid, qid))["n"]
+    # latest hint of any kind on the ladder range (an error explanation included): for repeats and `since`
     last = db.q1("""SELECT level, created_at, text FROM app.hints WHERE learner_id=%s AND question_id=%s
-                    AND level BETWEEN 1 AND 4 ORDER BY level DESC, created_at DESC LIMIT 1""", (lid, qid))
-    last_level = last["level"] if last else 0
+                    AND level BETWEEN 1 AND 4 ORDER BY created_at DESC, hint_id DESC LIMIT 1""", (lid, qid))
+    # ladder position: error explanations don't climb the ladder, so they are left out
+    last_level = db.q1("""SELECT COALESCE(max(level), 0) m FROM app.hints WHERE learner_id=%s AND question_id=%s
+                          AND level BETWEEN 1 AND 4 AND source NOT LIKE '%%\\_error'""", (lid, qid))["m"]
     since = attempts if not last else db.q1(
         """SELECT count(*) n FROM app.attempts WHERE learner_id=%s AND question_id=%s AND kind='run'
            AND created_at > (SELECT max(created_at) FROM app.hints WHERE learner_id=%s AND question_id=%s
@@ -326,7 +335,8 @@ def _help_state(L, q):
     fails_after_l4 = db.q1(
         """SELECT count(*) n FROM app.attempts WHERE learner_id=%s AND question_id=%s AND kind='run'
            AND NOT correct AND created_at > (SELECT min(created_at) FROM app.hints
-                                             WHERE learner_id=%s AND question_id=%s AND level = 4)""",
+                                             WHERE learner_id=%s AND question_id=%s AND level = 4
+                                               AND source NOT LIKE '%%\\_error')""",
         (lid, qid, lid, qid))["n"]
     last_attempt = db.q1("""SELECT sql_text, error, diff, correct FROM app.attempts WHERE learner_id=%s
                             AND question_id=%s AND kind='run' ORDER BY created_at DESC LIMIT 1""", (lid, qid))
@@ -364,7 +374,7 @@ def help_(qid: str, L=Depends(learner)):
     mastered = _mastered(lid, q)
     st = _help_state(L, q)
     d = decide(L["arm"], mastered, st["attempts"], st["since"], st["last_level"],
-               st["closeness"], st["fails_after_l4"])
+               st["closeness"], st["fails_after_l4"], hinted=st["last"] is not None)
     if d.action in ("gate", "solved"):
         r = dict(text=d.message, source=d.action, guard_blocked=0, model=None, latency_ms=0)
     elif d.action == "repeat":

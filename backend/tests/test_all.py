@@ -65,7 +65,19 @@ def test_policy_follows_closeness():
     assert closeness(None) == "none"
     assert closeness({"error": "syntax error"}) == "error"
     assert closeness({"correct": True, "diff": {}}) == "correct"
-    assert closeness({"diff": {"reason": "column_count"}}) == "close"
+    # wrong column count is close only with the right row count (not an exploratory SELECT *)
+    assert closeness({"diff": {"reason": "column_count", "got_rows": 5, "expected_rows": 5,
+                               "got_cols": 1, "expected_cols": 2}}) == "close"
+    assert closeness({"diff": {"reason": "column_count", "got_rows": 40, "expected_rows": 5,
+                               "got_cols": 6, "expected_cols": 2}}) == "far"
+    assert closeness({"diff": {"reason": "column_count", "got_rows": 5, "expected_rows": 5,
+                               "got_cols": 4, "expected_cols": 2, "matched_cols": 2}}) == "close"
+    assert closeness({"diff": {"reason": "column_count", "got_rows": 5, "expected_rows": 5,
+                               "got_cols": 4, "expected_cols": 2, "matched_cols": 1}}) == "far"
+    assert closeness({"diff": {"reason": "column_count"}}) == "far"
+    # an error explanation doesn't climb the ladder: with no ladder hint yet, the next far attempt gets L1
+    assert decide("tutor", False, 2, 1, 0, "far", hinted=True).level == 1
+    assert decide("tutor", False, 2, 0, 0, "error", hinted=True).action == "repeat"
     assert closeness({"diff": {"reason": "order"}}) == "close"
     assert closeness({"diff": {"reason": "rows", "expected_rows": 19, "missing_rows": 2, "extra_rows": 1}}) == "close_rows"
     assert closeness({"diff": {"reason": "rows", "expected_rows": 19, "missing_rows": 8, "extra_rows": 2}}) == "far"
@@ -278,21 +290,21 @@ def test_tutor_llm_path_with_guard(monkeypatch):
     q = QUESTIONS["T3"]
     monkeypatch.setattr(assistant.settings, "groq_api_key", "fake")
     # LLM leaks twice -> deterministic fallback, both blocks counted
-    monkeypatch.setattr(assistant, "_llm", lambda s, u: (f"```sql\n{q['sql']}\n```", "m1"))
+    monkeypatch.setattr(assistant, "_llm", lambda s, u, d=None: (f"```sql\n{q['sql']}\n```", "m1"))
     r = assistant.tutor_hint(q, 3, None)
     assert r["source"] == "fallback" and r["guard_blocked"] == 2 and q["sql"] not in r["text"]
     # leaks once, then clean -> retry accepted
     calls = iter([(f"```sql\n{q['sql']}\n```", "m1"), ("Which products never show up in any order?", "m1")])
-    monkeypatch.setattr(assistant, "_llm", lambda s, u: next(calls))
+    monkeypatch.setattr(assistant, "_llm", lambda s, u, d=None: next(calls))
     r = assistant.tutor_hint(q, 1, None)
     assert r["source"] == "llm_retry" and r["guard_blocked"] == 1
     # baseline: wrong query twice -> reference fallback; right query -> llm
-    monkeypatch.setattr(assistant, "_llm", lambda s, u: ("```sql\nselect 1\n```", "m1"))
+    monkeypatch.setattr(assistant, "_llm", lambda s, u, d=None: ("```sql\nselect 1\n```", "m1"))
     assert assistant.baseline_answer(q, None)["source"] == "fallback"
-    monkeypatch.setattr(assistant, "_llm", lambda s, u: (f"```sql\n{q['sql']}\n```", "m1"))
+    monkeypatch.setattr(assistant, "_llm", lambda s, u, d=None: (f"```sql\n{q['sql']}\n```", "m1"))
     assert assistant.baseline_answer(q, None)["source"] == "llm"
     # LLM down -> fallback, never a crash
-    def boom(s, u):
+    def boom(s, u, d=None):
         raise RuntimeError("down")
     monkeypatch.setattr(assistant, "_llm", boom)
     assert assistant.tutor_hint(q, 2, None)["source"] == "fallback"
@@ -547,12 +559,25 @@ def test_close_attempt_jumps_to_fix_and_reveal_path(client, monkeypatch):
     assert db.q1("SELECT source FROM app.hints ORDER BY hint_id DESC LIMIT 1")["source"].endswith("_error")
     # reveal: 409 before allowed; after L4 + 2 failed runs it is offered and works
     assert client.post("/api/questions/T1/reveal", headers=k).status_code == 409
-    client.post("/api/questions/T1/run", json={"sql": bad}, headers=k)
-    client.post("/api/questions/T1/run", json={"sql": bad}, headers=k)
+    assert not client.post("/api/questions/T1/run", json={"sql": bad}, headers=k).json()["reveal_available"]
+    # the run itself tells the UI that "Show solution" is now available (no extra help click)
+    assert client.post("/api/questions/T1/run", json={"sql": bad}, headers=k).json()["reveal_available"]
     assert client.get("/api/questions/T1/hints", headers=k).json()["reveal_available"]
     r = client.post("/api/questions/T1/reveal", headers=k).json()
     assert "```sql" in r["text"] and not r["reveal_available"]
     assert client.post("/api/questions/T1/reveal", headers=k).status_code == 409
+    # solved after the reveal: shown as 'revealed', not 'solved'
+    from app.main import QUESTIONS
+    assert client.post("/api/questions/T1/run", json={"sql": QUESTIONS["T1"]["sql"]}, headers=k).json()["correct"]
+    assert client.get("/api/me", headers=k).json()["status"]["T1"] == "revealed"
+    # T2: the error explanation did not use up L1 -> the next (far) attempt gets L1
+    client.post("/api/questions/T2/run", json={"sql": "select 1"}, headers=k)
+    client.post("/api/questions/T2/help", headers=k)
+    assert db.q1("SELECT level, source FROM app.hints ORDER BY hint_id DESC LIMIT 1") == {"level": 1, "source": "fallback"}
+    # T6: an exploratory SELECT * is far, not close -> L1, not L4
+    client.post("/api/questions/T6/run", json={"sql": "select * from customers"}, headers=k)
+    client.post("/api/questions/T6/help", headers=k)
+    assert db.q1("SELECT level FROM app.hints ORDER BY hint_id DESC LIMIT 1")["level"] == 1
 
 
 def test_hint_shape_check(monkeypatch):
@@ -567,6 +592,30 @@ def test_hint_shape_check(monkeypatch):
     assert shape_problem("x" * 300, 1)                                   # too long for L1
     # a too-detailed LLM reply is retried, then replaced by the deterministic hint
     monkeypatch.setattr(assistant.settings, "groq_api_key", "x")
-    monkeypatch.setattr(assistant, "_llm", lambda s, u: (long_plan, "m1"))
+    monkeypatch.setattr(assistant, "_llm", lambda s, u, d=None: (long_plan, "m1"))
     r = assistant.tutor_hint(QUESTIONS["T5"], 1, None)
     assert r["source"] == "fallback" and r["guard_blocked"] == 2
+
+
+def test_grader_matched_cols():
+    exp = norm_rows([(1, "a"), (2, "b")])
+    ok, d = compare([(1, "x", "a"), (2, "y", "b")], 3, exp, 2, False)
+    assert not ok and d["reason"] == "column_count" and d["matched_cols"] == 2
+
+
+def test_l1_shape_allows_english_blocks_sql():
+    from app.assistant import shape_problem
+    for t in ["Which customers are not included in your result?", "Is your query behaving as you expect?",
+              "Your result mixes two distinct facts.", "Some products are not in your result. Why?"]:
+        assert shape_problem(t, 1) is None, t
+    for t in ["Use a LEFT JOIN here.", "Try NOT EXISTS.", "Use GROUP BY", "add HAVING", "select distinct name"]:
+        assert shape_problem(t, 1), t
+
+
+def test_skeleton_keeps_join_chain():
+    from app.assistant import skeleton
+    from app.main import QUESTIONS
+    for q in QUESTIONS.values():
+        sk = skeleton(q)
+        assert sk.count("___") >= q["sql"].upper().count("JOIN"), q["id"]
+        assert sk.upper().count("JOIN") == q["sql"].upper().count("JOIN"), q["id"]

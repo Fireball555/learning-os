@@ -56,6 +56,11 @@ def compare(got_rows, got_ncols, expected_rows, expected_ncols, ordered):
             "expected_cols": expected_ncols, "got_cols": got_ncols}
     if got_ncols != expected_ncols:
         diff["reason"] = "column_count"
+        if len(got) == len(exp) and got_ncols > expected_ncols:
+            # how many expected columns appear, value for value, somewhere in the learner's columns
+            gcols = [Counter(r[i] for r in got) for i in range(got_ncols)]
+            diff["matched_cols"] = sum(any(gc == Counter(r[j] for r in exp) for gc in gcols)
+                                       for j in range(expected_ncols))
         return False, diff
     if ordered:
         if got == exp:

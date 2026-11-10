@@ -67,15 +67,18 @@ def main():
         views = {v["question_id"]: v for v in d["views"] if v["learner_id"] == lid}
         runs = [x for x in d["attempts"] if x["learner_id"] == lid and x["kind"] == "run" and x["phase"] == "practice"]
         hints = [h for h in d["hints"] if h["learner_id"] == lid]
-        real_help = [h for h in hints if h["level"] >= 1]           # excludes gate (0) and repeat (-1)
+        # real help = a tutor ladder hint (1-4, error explanations included) or a baseline answer (9);
+        # excludes gate (0), repeat (-1), solved (-2) and "Show solution" (8, counted as `revealed`)
+        real_help = [h for h in hints if 1 <= h["level"] <= 4 or h["level"] == 9]
         levels = [h["level"] for h in real_help if h["level"] <= 4 and not h["source"].endswith("_error")]
         revealed = {h["question_id"]: h["created_at"] for h in hints if h["source"] == "reveal"}
         # pre-registered: a question solved only after "Show solution" does not count as solved
         solved = [q for q in practice_ids if views.get(q, {}).get("final_correct")
                   and not (q in revealed and ts(revealed[q]) <= ts(views[q]["finished_at"]))]
         first_help = {}
-        for h in hints:
-            first_help.setdefault(h["question_id"], h["created_at"])
+        for h in real_help + [h for h in hints if h["source"] == "reveal"]:
+            if h["question_id"] not in first_help or ts(h["created_at"]) < ts(first_help[h["question_id"]]):
+                first_help[h["question_id"]] = h["created_at"]
         solved_unaided = [q for q in solved
                           if q not in first_help or ts(views[q]["finished_at"]) < ts(first_help[q])]
         times = [(ts(views[q]["finished_at"]) - ts(views[q]["first_seen"])).total_seconds()
@@ -85,7 +88,7 @@ def main():
         focus = sum(1 for e in d["events"] if e["kind"] == "focus" and e["payload"].get("learner_id") == lid
                     and e["payload"].get("kind") == "hidden")
         surv = next((s["value"] for s in d["survey"] if s["learner_id"] == lid), None)
-        llm_help = [h for h in real_help if h["source"] in ("llm", "llm_retry", "fallback")]
+        llm_help = [h for h in real_help if h["source"].removesuffix("_error") in ("llm", "llm_retry", "fallback")]
         rows.append({
             "learner": f"L{i}", "arm": l["arm"], "pair": l["pair_no"],
             "pre_correct_6": pre6 if pre_ok else None,
@@ -101,7 +104,7 @@ def main():
             "gates_repeats": len(hints) - len(real_help),
             "max_level": "full answer" if l["arm"] == "baseline" else (max(levels) if levels else 0),
             "mean_level": "full answer" if l["arm"] == "baseline" else (round(st.mean(levels), 2) if levels else 0),
-            "fallback_share": round(sum(1 for h in llm_help if h["source"] == "fallback") / len(llm_help), 2) if llm_help else None,
+            "fallback_share": round(sum(1 for h in llm_help if h["source"].removesuffix("_error") == "fallback") / len(llm_help), 2) if llm_help else None,
             "guard_blocks": sum(h["guard_blocked"] for h in hints),
             "median_sec_heldout_q": round(st.median(times)) if times else None,
             "tab_switches_tests": focus,
@@ -168,9 +171,11 @@ def main():
            f"{'**COLLAPSED** (< 0.75 x baseline)' if collapse else 'not collapsed'}"]
     md += ["", "## LLM fallback share per arm (pre-registered deviation if > 20%)"]
     for arm in ("tutor", "baseline"):
-        hs = [h for h in d["hints"] if h["arm"] == arm and h["level"] >= 1
+        # LLM-eligible replies only: ladder hints and baseline answers (not gates, repeats, reveals)
+        hs = [h for h in d["hints"] if h["arm"] == arm and (1 <= h["level"] <= 4 or h["level"] == 9)
+              and h["source"].removesuffix("_error") in ("llm", "llm_retry", "fallback")
               and any(l["learner_id"] == h["learner_id"] for l in learners)]
-        fb = sum(1 for h in hs if h["source"] == "fallback")
+        fb = sum(1 for h in hs if h["source"].removesuffix("_error") == "fallback")
         share = fb / len(hs) if hs else 0
         md.append(f"- {arm}: {fb}/{len(hs)} = {share:.0%}" + ("  **DEVIATION: report it**" if share > 0.2 else ""))
         mix = {}

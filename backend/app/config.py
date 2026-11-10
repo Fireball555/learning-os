@@ -19,7 +19,7 @@ class Settings:
         "GROQ_MODELS",
         "openai/gpt-oss-120b,openai/gpt-oss-20b,qwen/qwen3.8-27b",
     ).split(",") if m.strip()]
-    allow_origins = [o for o in os.environ.get("ALLOW_ORIGINS", "").split(",") if o]
+    allow_origins = [o.strip() for o in os.environ.get("ALLOW_ORIGINS", "").split(",") if o.strip()]
     frontend_dist = ROOT / "frontend" / "dist"
     questions_json = Path(__file__).with_name("questions.json")
 

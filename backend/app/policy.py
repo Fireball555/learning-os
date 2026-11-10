@@ -13,15 +13,16 @@ Inputs (all from the database, never from the client):
   closeness         classification of the latest run (see `closeness()`):
                     'none' | 'error' | 'far' | 'close_rows' | 'close' | 'correct'
                     'close'      = right rows, only the columns or the order are off (a mechanical slip)
+                                   (a wrong column count is close only if the row count matches)
                     'close_rows' = only a few rows wrong (often the CONCEPT itself, e.g. inner vs left join)
   fails_after_l4    runs that were not correct since the first L4 hint on this question
 
 Tutor ladder (never reveals an executable full query; every level is about the learner's
 own latest attempt when there is one):
-  L1 concept   – which idea their attempt is missing or getting wrong; no table/column names
-  L2 plan      – which clause is wrong and why, in words; no SQL
-  L3 skeleton  – SQL outline around their attempt with ___ blanks; must not run
-  L4 fix       – the exact change to make to their attempt, without writing the full query
+  L1 symptom   – what is wrong with their result, as a question; no SQL feature or schema names
+  L2 concept   – explains the idea behind the fix, in words; at most 2 short code words
+  L3 skeleton  – one or two sentences + a code-made outline of the solution with ___ blanks; never runs
+  L4 fix       – the exact change to make to their attempt, as a fragment, never the full query
   E  error     – explains the SQL error message and how to fix that line (mechanics, not the
                  skill; given straight away and does not climb the ladder)
 Last resort: after L4 and REVEAL_AFTER more failed runs, the learner may choose
@@ -60,8 +61,18 @@ def closeness(last_attempt) -> str:
         return "correct"
     d = last_attempt.get("diff") or {}
     reason = d.get("reason")
-    if reason in ("column_count", "order"):
+    if reason == "order":
         return "close"
+    if reason == "column_count":
+        # close only when the ROWS are right: same row count, and either columns are missing
+        # (e.g. DISTINCT(a, b) packed into one) or every expected column is among the extra ones.
+        # An exploratory SELECT * on the wrong rows is far.
+        if d.get("got_rows") is not None and d.get("got_rows") == d.get("expected_rows"):
+            if (d.get("got_cols") or 0) < (d.get("expected_cols") or 0):
+                return "close"
+            if d.get("matched_cols") == d.get("expected_cols"):
+                return "close"
+        return "far"
     if reason == "rows":
         exp = max(1, d.get("expected_rows") or 0)
         wrong = (d.get("missing_rows") or 0) + (d.get("extra_rows") or 0)
@@ -71,7 +82,11 @@ def closeness(last_attempt) -> str:
 
 
 def decide(arm: str, mastered: bool, attempts: int, attempts_since: int, last_level: int,
-           closeness: str = "none", fails_after_l4: int = 0) -> Decision:
+           closeness: str = "none", fails_after_l4: int = 0, hinted: bool | None = None) -> Decision:
+    """hinted: any hint (including an error explanation) was already given on this question.
+    Error explanations don't climb the ladder, so they are not counted in last_level."""
+    if hinted is None:
+        hinted = last_level > 0
     if arm == "baseline":
         return Decision("answer", BASELINE_LEVEL)
     if arm != "tutor":
@@ -83,10 +98,11 @@ def decide(arm: str, mastered: bool, attempts: int, attempts_since: int, last_le
         if mastered:
             return Decision("gate", 0, message=GATE_MSG)
         return Decision("hint", 1)            # no attempt yet: always start with the lightest touch
-    if last_level > 0 and attempts_since == 0:
+    if hinted and attempts_since == 0:
         return Decision("repeat", last_level, message=REPEAT_MSG)
     if closeness == "error":
-        # explain the error; stay at the current ladder level (errors are mechanics)
+        # explain the error; it does not climb the ladder (errors are mechanics). Stored at
+        # max(1, last_level) with an *_error source, and ignored when computing last_level.
         return Decision("hint", max(1, last_level), mode="error")
     if closeness == "close":                 # right rows, wrong shape: give the exact fix
         return Decision("hint", MAX_LEVEL)

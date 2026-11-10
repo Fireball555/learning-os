@@ -70,9 +70,23 @@ LEVEL_LIMITS = {
     4: dict(chars=650, code=6, fence=True, names=True),
     "error": dict(chars=650, code=6, fence=True, names=True),
 }
-L1_FORBIDDEN = ["left join", "right join", "outer join", "inner join", "not exists", "exists (", "anti-join",
-                "anti join", "antijoin", "coalesce", "distinct", "group by", "having", "extract(",
-                "subquery", "sub-query", " cte", "not in", "is null", "except", "union"]
+# SQL features an L1 hint must not name. Word-boundary patterns that look like SQL, so ordinary
+# English ("not included", "behaving", "two distinct facts", "except for") is not rejected.
+L1_FORBIDDEN = [
+    (r"\b(left|right|full|inner|outer|cross)\s+(outer\s+)?join\b", "left/inner join"),
+    (r"\bnot\s+exists\b|\bexists\s*\(", "exists"),
+    (r"\banti[\s-]?join\b", "anti-join"),
+    (r"\bcoalesce\b", "coalesce"),
+    (r"\bselect\s+distinct\b|\bdistinct\s*\(|`[^`]*\bdistinct\b[^`]*`|\bDISTINCT\b", "distinct"),
+    (r"\bgroup\s+by\b", "group by"),
+    (r"\bHAVING\b|`[^`]*\bhaving\b[^`]*`|\bhaving\s+(count|sum|max|min|avg)\b|\ba\s+having\s+(clause|filter)\b", "having"),
+    (r"\bextract\s*\(", "extract"),
+    (r"\bsub-?quer(y|ies)\b|\bctes?\b|\bcommon table expression", "subquery"),
+    (r"\bnot\s+in\s*\(|\bNOT\s+IN\b", "not in"),
+    (r"\bis\s+(not\s+)?null\b", "is null"),
+    (r"\bEXCEPT\b|\bUNION\b|`[^`]*\b(except|union)\b[^`]*`", "except/union"),
+]
+_L1_RX = [(re.compile(rx), name) for rx, name in L1_FORBIDDEN]
 _LIST_OR_HEADING = re.compile(r"(?m)^\s*(?:[-*•]\s|\d+[.)]\s|#{1,6}\s|\*\*[^*]+\*\*\s*:?\s*$)")
 _SCHEMA_NAMES = None
 
@@ -99,8 +113,8 @@ def shape_problem(text, level, mode="normal"):
     if len(re.findall(r"`[^`\n]+`", text)) > lim["code"]:
         return "contains too many code fragments"
     if level == 1 and mode != "error":
-        low = text.lower()
-        hit = [k for k in L1_FORBIDDEN if k in low]
+        low = text.lower()   # lower-case patterns run on the lowered text, the UPPERCASE-only ones on the original
+        hit = [name for rx, name in _L1_RX if rx.search(low) or rx.search(text)]
         if hit:
             return f"names the SQL feature that fixes it ({hit[0]}); describe the symptom instead"
     if not lim["names"]:
@@ -236,9 +250,8 @@ def answers_correctly(text: str, question: dict) -> bool:
 _BLANK_RULES = [
     (r"(?i)\bNOT EXISTS\b|\bEXISTS\b", "___ EXISTS"),
     (r"(?i)\bLEFT JOIN\b|\bJOIN\b", "___ JOIN"),
-    (r"(?is)(\bON\b)(.*?)(?=___ JOIN|\bWHERE\b|\bGROUP\b|\bORDER\b|\bHAVING\b|\)|$)", r"\1 ___ "),
+    (r"(?is)(\bON\b)(.*?)(?=___ JOIN|\bWHERE\b|\bGROUP\b|\bORDER\b|\bHAVING\b|\)|$)", r"\1 ___\n"),
     (r"(?is)(\bWHERE\b)(?!\s*___ EXISTS)(.*?)(?=\bGROUP\b|\bORDER\b|\bHAVING\b|\)\s*$|$)", r"\1 ___ "),
-    (r"(?is)(\bWHERE\b\s*___ EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+\S+(?:\s+\w+)?)(.*?)(?=\bWHERE\b)", r"\1 ___ "),
     (r"(?is)(\bHAVING\b)(.*?)(?=\bORDER\b|\)\s*,|\)\s*$|$)", r"\1 ___ "),
     (r"(?i)\b(COUNT|SUM|MAX|MIN|AVG|COALESCE)\s*\(", "___("),
 ]
@@ -289,22 +302,34 @@ def _model_kwargs(model):
 
 def _strip_reasoning(text):
     """Drop any <think>...</think> block a reasoning model leaves in its reply."""
-    return re.sub(r"(?is)<think>.*?</think>", "", text).strip()
+    text = re.sub(r"(?is)<think>.*?</think>", "", text)
+    return re.sub(r"(?is)<think>.*$", "", text).strip()     # an unterminated block: drop to the end
 
 
 _COOLDOWN = {}          # model -> time.monotonic() until which it is skipped
 COOLDOWN_S = 120
 
 
-def _llm(system, user):
+HELP_BUDGET_S = 20.0    # total wait for one help request; after it, the deterministic hint is used
+MIN_CALL_S = 3.0
+
+
+def _llm(system, user, deadline=None):
     """Try each model in settings.groq_models in order. A model that is rate-limited, unavailable,
-    times out or returns nothing is skipped for COOLDOWN_S. Returns (text, model)."""
+    times out or returns nothing is skipped for COOLDOWN_S. Returns (text, model).
+    `deadline` (time.monotonic()) caps the total wait across all models."""
     from groq import Groq
-    client = Groq(api_key=settings.groq_api_key, timeout=12.0, max_retries=0)
     now = time.monotonic()
+    if deadline is None:
+        deadline = now + HELP_BUDGET_S
     chain = [m for m in settings.groq_models if _COOLDOWN.get(m, 0) <= now] or list(settings.groq_models)
     last = None
     for model in chain:
+        left = deadline - time.monotonic()
+        if left < MIN_CALL_S:
+            last = last or TimeoutError("help time budget used up")
+            break
+        client = Groq(api_key=settings.groq_api_key, timeout=min(12.0, left), max_retries=0)
         kw = dict(model=model, temperature=0.3,
                   messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
         kw.update(_model_kwargs(model))
@@ -346,15 +371,18 @@ def tutor_hint(question, level, last_attempt, mode="normal"):
         return dict(text=fallback, source="fallback", guard_blocked=0, model=None,
                     latency_ms=int((time.perf_counter() - t0) * 1000))
     user = tutor_prompt(question, level, last_attempt, mode)
+    deadline = time.monotonic() + HELP_BUDGET_S
     why = ""
     for attempt, src in ((0, "llm"), (1, "llm_retry")):
         try:
             prompt = user if attempt == 0 else user + f"\n\nIMPORTANT: your previous reply was rejected: {why}. Reply again, fixing that."
-            text, used = _llm(TUTOR_SYSTEM, prompt)
+            text, used = _llm(TUTOR_SYSTEM, prompt, deadline)
         except Exception:
             break
-        if leaks_answer(text, question):
-            why = "it contained a full working query; never give the complete query"
+        # guard the hint exactly as the learner will see it (at L3: the sentence plus the skeleton,
+        # so a sentence that fills the blanks is caught)
+        if leaks_answer(finish_hint(text, question, level, mode), question):
+            why = "it contained a full working query, or filled in the blanks; never give the complete query"
         else:
             why = shape_problem(text, level, mode)
             if why is None:
@@ -375,9 +403,10 @@ def baseline_answer(question, last_attempt):
         return dict(text=ref, source="fallback", guard_blocked=0, model=None,
                     latency_ms=int((time.perf_counter() - t0) * 1000))
     user = _context(question, last_attempt) + "\n\nTASK: Give the complete working query and a short explanation."
+    deadline = time.monotonic() + HELP_BUDGET_S
     for src in ("llm", "llm_retry"):
         try:
-            text, used = _llm(BASELINE_SYSTEM, user)
+            text, used = _llm(BASELINE_SYSTEM, user, deadline)
         except Exception:
             break
         if answers_correctly(text, question):

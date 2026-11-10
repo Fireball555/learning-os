@@ -37,13 +37,13 @@ This is updated live during practice.
   - If learners come in separate sittings, those in the same sitting are ranked and paired as above. A learner who comes alone gets a coin flip; the next solo learner gets the opposite arm and becomes their pair (randomised in blocks of two).
   - With an odd count, the lowest-ranked learner is unpaired and gets their own coin flip.
 - Both arms use the same app, schema, context, UI and model chain (Groq, temperature 0.3: `openai/gpt-oss-120b`, then `openai/gpt-oss-20b`, then `qwen/qwen3.8-27b` when a model is rate-limited). The fallback applies to both arms at the same moment; every hint records which model wrote it, and the report shows the model mix per arm. Only the help policy differs.
-  - **Tutor arm:** a ladder about the learner's own latest attempt: L1 concept, L2 plan, L3 skeleton with blanks, L4 the exact fix. The level is set by rules (`policy.py`) from how close the latest run is, as measured by the grader:
-    - SQL error: explain the error (does not climb the ladder);
-    - **close** (right rows, only the columns or the order wrong): straight to L4;
+  - **Tutor arm:** a ladder about the learner's own latest attempt: L1 symptom (a question about what is wrong with their result, naming no SQL feature), L2 concept (explains the idea, in words), L3 skeleton (a sentence plus the solution's outline with `___` blanks, made by code), L4 the exact fix (a fragment, never the full query). The level is set by rules (`policy.py`) from how close the latest run is, as measured by the grader:
+    - SQL error: explain the error (does not climb the ladder: the next normal hint is still the next rung);
+    - **close** (right rows, only the columns or the order wrong; a wrong column count counts only when the row count is right): straight to L4;
     - **a few rows wrong** (at most max(2, 20% of expected rows)): up two levels, since this is often the concept itself (e.g. inner vs left join);
     - **far**: one step up the ladder per new attempt.
     - Last resort: after L4 and 2 more failed runs, the learner may choose "Show solution". A question solved after that **does not count as solved** in practice completion; reveals are reported per learner.
-    - The tutor never gives the full query otherwise; a deterministic guard enforces this.
+    - The tutor never gives the full query otherwise; a deterministic guard checks every hint exactly as shown (at L3, the sentence plus the skeleton). Each help request waits at most 20 s for the LLM, then uses the built-in hint.
   - **Baseline arm:** the full correct query and a short explanation, every time. It is correct by construction, and the learner gets it through the same button.
 - **Sessions:**
   - Pretest: 6 questions, **15 minutes**, unaided. Learners have not been taught joins, so low scores are expected and they are told so.

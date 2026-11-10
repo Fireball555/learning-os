@@ -77,7 +77,7 @@ def main():
             print(f"   LLM FAILED: {type(e).__name__}: {e}")
             continue
         shape = assistant.shape_problem(text, level, mode)
-        leak = assistant.leaks_answer(text, q)          # the LLM's own text (the L3 skeleton is code-made)
+        leak = assistant.leaks_answer(assistant.finish_hint(text, q, level, mode), q)   # as the learner sees it
         text = assistant.finish_hint(text, q, level, mode)
         verdict = "LEAK (blocked)" if leak else (f"SHAPE: {shape}" if shape else "OK")
         print(f"   model: {model} | {len(text)} chars | verdict: {verdict}")

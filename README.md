@@ -50,14 +50,14 @@ flowchart LR
 | Running sessions, invigilating, observations | **Human** | `/admin` console |
 
 **The tutor ladder:**
-- **L1 concept:** names the idea the question needs.
-- **L2 plan:** which tables and which join, in words.
-- **L3 skeleton:** the query's shape with `___` blanks.
-- **L4 fix:** points at what's wrong in the learner's own attempt.
+- **L1 symptom:** a question about what is wrong with their result. Names no SQL feature, table or column.
+- **L2 concept:** explains the idea behind the fix, in words.
+- **L3 skeleton:** one sentence plus the solution's shape with `___` blanks (made by code, never runs).
+- **L4 fix:** the exact change to the learner's own attempt, as a fragment.
 
-**How the ladder moves (policy v2):** every hint is about the learner's own latest query. The rules look at how close it is, as measured by the grader:
-- SQL error: explain the error.
-- Close (right rows, only the columns or order wrong): straight to L4.
+**How the ladder moves (policy v3):** every hint is about the learner's own latest query. The rules look at how close it is, as measured by the grader:
+- SQL error: explain the error. This doesn't use up a rung.
+- Close (right rows, only the columns or order wrong): straight to L4. A `SELECT *` on the wrong rows is not close.
 - A few rows off: up two levels. This is often the concept itself, such as an inner join where a left join is needed.
 - Far: one step up per new attempt.
 
@@ -77,7 +77,7 @@ backend/app/
   question_bank.py   22 questions (6 pretest / 8 practice / 8 held-out), the single source of truth
   questions.json     frozen expected result sets (scripts/build_questions.py)
   grader.py  sandbox.py  policy.py  assistant.py  db.py  config.py
-backend/tests/       57 tests: grader, policy, sandbox security, 30 trap/alternative queries,
+backend/tests/       66 tests: grader, policy, sandbox security, 30 trap/alternative queries,
                      full study flow, races, outages, timer, leak guard
 frontend/            React + Vite + Tailwind + CodeMirror (dist/ is committed and served by FastAPI)
 db/                  schema, deterministic seed generator, app tables + read-only role

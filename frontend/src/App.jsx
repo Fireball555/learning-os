@@ -7,6 +7,8 @@ import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags as t } from '@lezer/highlight'
 import { api, getCode, setCode } from './api.js'
 
+const FINISHED = ['submitted', 'solved', 'revealed']
+
 const PHASE_LABEL = { waiting: 'Waiting', pretest: 'Pretest', practice: 'Practice', heldout: 'Final test', break: 'Break', done: 'Done' }
 const draftKey = (qid) => `los_draft_${getCode()}_${qid}`
 const loadDraft = (qid) => { try { return localStorage.getItem(draftKey(qid)) || '' } catch { return '' } }
@@ -137,7 +139,7 @@ function Centered({ children }) {
 
 function Body({ me, refresh, offset }) {
   const isTest = me.phase === 'pretest' || me.phase === 'heldout'
-  const allDone = me.questions.length > 0 && me.questions.every((x) => ['submitted', 'solved'].includes(me.status[x.id]))
+  const allDone = me.questions.length > 0 && me.questions.every((x) => FINISHED.includes(me.status[x.id]))
   const introKey = `los_intro_${me.phase}`
   const [introSeen, setIntroSeen] = useState(() => { try { return sessionStorage.getItem(introKey) === '1' } catch { return false } })
   useEffect(() => { try { setIntroSeen(sessionStorage.getItem(introKey) === '1') } catch { setIntroSeen(false) } }, [introKey])
@@ -201,11 +203,21 @@ function Login({ onDone, notice }) {
 
 function Workspace({ me, refresh, isTest }) {
   const [idx, setIdx] = useState(() => {
-    const i = me.questions.findIndex((q) => !['submitted', 'solved'].includes(me.status[q.id]))
+    const i = me.questions.findIndex((q) => !FINISHED.includes(me.status[q.id]))
     return i === -1 ? 0 : i
   })
   const q = me.questions[idx]
+  const finished = me.questions.filter((x) => FINISHED.includes(me.status[x.id])).length
+  // a question solved only after "Show solution" is finished but not counted as solved
   const done = me.questions.filter((x) => ['submitted', 'solved'].includes(me.status[x.id])).length
+  const goNext = () => setIdx((cur) => {
+    const n = me.questions.length
+    for (let k = 1; k <= n; k++) {           // next question not finished yet, wrapping round
+      const j = (cur + k) % n
+      if (!FINISHED.includes(me.status[me.questions[j].id])) return j
+    }
+    return Math.min(cur + 1, n - 1)
+  })
 
   useEffect(() => {
     if (!isTest) return
@@ -223,10 +235,12 @@ function Workspace({ me, refresh, isTest }) {
           {me.questions.map((x, i) => {
             const s = me.status[x.id]
             const isDone = s === 'submitted' || s === 'solved'
+            const isRevealed = s === 'revealed'
             return (
               <button key={x.id} onClick={() => setIdx(i)} className="qbtn" data-state={isDone ? 'done' : ''} data-current={i === idx ? '1' : ''}
-                aria-label={`Question ${i + 1}${isDone ? (isTest ? ', submitted' : ', solved') : ''}`}>
-                {isDone ? '✓' : i + 1}
+                title={isRevealed ? 'Solution shown: not counted as solved' : undefined}
+                aria-label={`Question ${i + 1}${isDone ? (isTest ? ', submitted' : ', solved') : isRevealed ? ', solution shown' : ''}`}>
+                {isDone ? '✓' : isRevealed ? '–' : i + 1}
               </button>
             )
           })}
@@ -244,8 +258,8 @@ function Workspace({ me, refresh, isTest }) {
       </aside>
       <main className="flex-1 min-w-0 flex flex-col min-h-[600px] md:min-h-0">
         <Editor key={q.id} q={q} me={me} isTest={isTest} refresh={refresh}
-          onNext={() => setIdx((i) => Math.min(i + 1, me.questions.length - 1))} />
-        {me.phase === 'practice' && <FinishPractice refresh={refresh} open={done === me.questions.length} />}
+          onNext={goNext} />
+        {me.phase === 'practice' && <FinishPractice refresh={refresh} open={finished === me.questions.length} />}
       </main>
     </div>
   )
@@ -334,7 +348,7 @@ function Editor({ q, me, isTest, refresh, onNext }) {
   const submittedSql = (me.submitted_sql || {})[q.id]
   const status = me.status[q.id]
   const locked = isTest && status === 'submitted'
-  const solved = !isTest && status === 'solved'
+  const solved = !isTest && (status === 'solved' || status === 'revealed')
   const [code, setCodeText] = useState(() => (locked && submittedSql != null ? submittedSql : loadDraft(q.id)))
   const [res, setRes] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -370,6 +384,7 @@ function Editor({ q, me, isTest, refresh, onNext }) {
     try {
       const r = await api(`/questions/${q.id}/run`, { method: 'POST', body: { sql: codeRef.current } })
       setRes(r)
+      if (typeof r.reveal_available === 'boolean') setCanReveal(r.reveal_available)
       if (r.correct) refresh()
     } catch (e) { setRes({ error: friendly(e), infra: true }) }
     setBusy(false)
@@ -436,7 +451,7 @@ function Editor({ q, me, isTest, refresh, onNext }) {
           <button onClick={help} disabled={hintBusy || solved || res?.correct}
             title={solved || res?.correct ? 'Already solved' : undefined}
             className={`btn btn-outline ${canReveal && !(solved || res?.correct) ? '' : 'ml-auto'}`}>
-            {hintBusy ? 'Thinking…' : solved || res?.correct ? 'Solved ✓' : 'Get help'}
+            {hintBusy ? 'Thinking…' : solved || res?.correct ? (status === 'revealed' ? 'Solution shown' : 'Solved ✓') : 'Get help'}
           </button>
         )}
       </div>

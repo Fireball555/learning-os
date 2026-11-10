@@ -19,6 +19,8 @@ for m in settings.groq_models:
     kw.update(_model_kwargs(m))
     try:
         r = client.chat.completions.create(**kw)
-        print(f"OK    {m:40s} {int((time.perf_counter()-t0)*1000)} ms  -> {_strip_reasoning(r.choices[0].message.content or '')[:20]!r}")
+        text = _strip_reasoning(r.choices[0].message.content or "")
+        tag = "OK   " if text else "EMPTY"     # the app treats an empty reply as a failure
+        print(f"{tag} {m:40s} {int((time.perf_counter()-t0)*1000)} ms  -> {text[:20]!r}")
     except Exception as e:
         print(f"FAIL  {m:40s} {type(e).__name__}: {str(e)[:120]}")
