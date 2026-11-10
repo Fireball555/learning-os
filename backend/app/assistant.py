@@ -68,7 +68,7 @@ LEVEL_LIMITS = {
     2: dict(chars=450, code=2, fence=False, names=True),
     3: dict(chars=320, code=2, fence=False, names=True),   # the LLM's sentence only; the skeleton is added by code
     4: dict(chars=650, code=6, fence=True, names=True),
-    "error": dict(chars=650, code=6, fence=True, names=True),
+    "error": dict(chars=900, code=6, fence=True, names=True),
 }
 # SQL features an L1 hint must not name. Word-boundary patterns that look like SQL, so ordinary
 # English ("not included", "behaving", "two distinct facts", "except for") is not rejected.
@@ -125,9 +125,12 @@ def shape_problem(text, level, mode="normal"):
     return None
 
 
-ERROR_INSTRUCTION = ("ERROR hint. The learner's latest attempt failed with the SQL error shown. Explain in plain words "
-                     "what the error means and which part of their query causes it, and how to fix that part "
-                     "(a small fragment is fine). Do NOT write the full query or solve the rest of the question.")
+ERROR_INSTRUCTION = ("ERROR hint. The learner's latest attempt failed with the SQL error shown. In at most 4 short "
+                     "sentences, explain in plain words what the error means, which part of their query causes it, and "
+                     "how to fix THAT part only. You may show one small fragment (the fixed part, not the whole query). "
+                     "NEVER write their corrected query in full, and do not fix or mention any other problem in it "
+                     "(joins, grouping, filters, missing tables): the rest of the question is theirs to solve. "
+                     "Under 600 characters.")
 
 
 TUTOR_SYSTEM = """You are a SQL tutor helping a student learn multi-table SQL on PostgreSQL.
@@ -212,6 +215,9 @@ def reference_recall(text: str, question: dict) -> float:
     return hit / max(1, len(ref))
 
 
+GUARD_BUDGET_S = 10.0
+
+
 def leaks_answer(text: str, question: dict) -> bool:
     """Deterministic guard. True (block) if any SQL span in `text` returns the correct
     result set, if the reply contains >= 85% of the reference query's tokens, or if the
@@ -222,8 +228,11 @@ def leaks_answer(text: str, question: dict) -> bool:
         return True
     if any(reference_recall(c, question) >= RECALL_BLOCK for c in cands):
         return True
+    t_end = time.monotonic() + GUARD_BUDGET_S
     try:
         for _, res in run_many(cands[:MAX_GUARD_RUNS]):
+            if time.monotonic() > t_end:
+                return True       # couldn't check everything in time: block (fail closed)
             if res is None:
                 continue
             ok, _ = compare(res["rows"], res["ncols"], question["expected_rows"],
@@ -345,12 +354,52 @@ def _llm(system, user, deadline=None):
     raise last or RuntimeError("no model available")
 
 
+_ERROR_EXPLAIN = [
+    (r'column "?([\w.]+)"? must appear in the GROUP BY',
+     "Every column you SELECT next to an aggregate (COUNT, SUM, ...) must also be listed in GROUP BY. "
+     "Add {0} to your GROUP BY, or put it inside an aggregate."),
+    (r'missing FROM-clause entry for table "(\w+)"',
+     "You use the alias `{0}.` somewhere, but no table in your FROM part is called {0}. Every table you use a "
+     "column from has to appear in FROM (or a JOIN) with that alias."),
+    (r'invalid reference to FROM-clause entry for table "(\w+)"',
+     "The alias {0} is used before (or outside) the place where it is defined. Check that each alias is defined "
+     "once, and only used after its table appears in FROM or JOIN."),
+    (r'table name "(\w+)" specified more than once',
+     "Two tables in your query have the same alias {0}. Give each table its own alias."),
+    (r'column "([^"]+)" does not exist',
+     "There is no column called {0}. If it was meant as text, text values need single quotes: 'like this'. "
+     "Double quotes are for names. Otherwise check the spelling against the schema on the left."),
+    (r'relation "([^"]+)" does not exist',
+     "There is no table called {0}. Check the spelling against the schema on the left."),
+    (r'column ([\w.]+) does not exist',
+     "There is no column called {0}. Check the spelling against the schema on the left (the error may suggest the right name)."),
+    (r'syntax error at end of input',
+     "The query ends too early: something is not finished, often a missing closing bracket or a missing condition at the end."),
+    (r'syntax error at or near "([^"]+)"',
+     "The database got confused right at {0}, or just before it. Check the words immediately before it: a missing comma, "
+     "a missing FROM, a keyword in the wrong place, a reserved word such as order used as a name, or `is not` used "
+     "for a comparison (use `<>` or `!=`)."),
+    (r'aggregate functions are not allowed in WHERE',
+     "WHERE is checked row by row, before any grouping, so it can't use COUNT or SUM. Conditions on aggregates go in HAVING."),
+    (r'operator does not exist',
+     "The two sides of a comparison have different types (for example a number compared with text). Check the quotes and the columns being compared."),
+]
+
+
+def explain_error(msg):
+    """Deterministic, specific explanation of a PostgreSQL error message (fallback for error hints)."""
+    for rx, tmpl in _ERROR_EXPLAIN:
+        m = re.search(rx, msg, re.I)
+        if m:
+            return tmpl.format(*(g.strip() for g in m.groups()))
+    return ("Read it word by word: it names the part of your query that the database could not understand "
+            "(a misspelt column or table, a missing comma, or a bracket in the wrong place). Fix that part and run again.")
+
+
 def deterministic_hint(question, level, last_attempt, mode="normal"):
     """Fallback used when the LLM is unavailable or its reply was blocked. Same ladder."""
     if mode == "error" and last_attempt and last_attempt.get("error"):
-        return (f"Your query stopped with this error:\n\n{last_attempt['error']}\n\n"
-                "Read it word by word: it names the part of your query that the database could not understand "
-                "(a misspelt column or table, a missing comma, or a bracket in the wrong place). Fix that part and run again.")
+        return f"Your query stopped with this error:\n\n{last_attempt['error']}\n\n" + explain_error(last_attempt["error"])
     if level <= 2:
         return FALLBACK[question["skill"]][level]
     if level == 3:
@@ -366,9 +415,10 @@ def tutor_hint(question, level, last_attempt, mode="normal"):
     """Return dict(text, source, guard_blocked, model, latency_ms)."""
     t0 = time.perf_counter()
     blocked = 0
+    rejects = []          # why each LLM reply was rejected (logged in app.events)
     fallback = deterministic_hint(question, level, last_attempt, mode)
     if not settings.groq_api_key:
-        return dict(text=fallback, source="fallback", guard_blocked=0, model=None,
+        return dict(text=fallback, source="fallback", guard_blocked=0, model=None, rejects=[],
                     latency_ms=int((time.perf_counter() - t0) * 1000))
     user = tutor_prompt(question, level, last_attempt, mode)
     deadline = time.monotonic() + HELP_BUDGET_S
@@ -377,7 +427,8 @@ def tutor_hint(question, level, last_attempt, mode="normal"):
         try:
             prompt = user if attempt == 0 else user + f"\n\nIMPORTANT: your previous reply was rejected: {why}. Reply again, fixing that."
             text, used = _llm(TUTOR_SYSTEM, prompt, deadline)
-        except Exception:
+        except Exception as e:
+            rejects.append({"why": f"llm unavailable: {type(e).__name__}", "chars": 0})
             break
         # guard the hint exactly as the learner will see it (at L3: the sentence plus the skeleton,
         # so a sentence that fills the blanks is caught)
@@ -387,9 +438,10 @@ def tutor_hint(question, level, last_attempt, mode="normal"):
             why = shape_problem(text, level, mode)
             if why is None:
                 return dict(text=finish_hint(text, question, level, mode), source=src, guard_blocked=blocked, model=used,
-                            latency_ms=int((time.perf_counter() - t0) * 1000))
+                            rejects=rejects, latency_ms=int((time.perf_counter() - t0) * 1000))
+        rejects.append({"why": why, "chars": len(text), "model": used, "text": text[:1500]})
         blocked += 1
-    return dict(text=fallback, source="fallback", guard_blocked=blocked, model=None,
+    return dict(text=fallback, source="fallback", guard_blocked=blocked, model=None, rejects=rejects,
                 latency_ms=int((time.perf_counter() - t0) * 1000))
 
 
@@ -404,13 +456,16 @@ def baseline_answer(question, last_attempt):
                     latency_ms=int((time.perf_counter() - t0) * 1000))
     user = _context(question, last_attempt) + "\n\nTASK: Give the complete working query and a short explanation."
     deadline = time.monotonic() + HELP_BUDGET_S
+    rejects = []
     for src in ("llm", "llm_retry"):
         try:
             text, used = _llm(BASELINE_SYSTEM, user, deadline)
-        except Exception:
+        except Exception as e:
+            rejects.append({"why": f"llm unavailable: {type(e).__name__}", "chars": 0})
             break
         if answers_correctly(text, question):
-            return dict(text=text, source=src, guard_blocked=0, model=used,
+            return dict(text=text, source=src, guard_blocked=0, model=used, rejects=rejects,
                         latency_ms=int((time.perf_counter() - t0) * 1000))
-    return dict(text=ref, source="fallback", guard_blocked=0, model=None,
+        rejects.append({"why": "baseline query not correct", "chars": len(text), "model": used, "text": text[:1500]})
+    return dict(text=ref, source="fallback", guard_blocked=0, model=None, rejects=rejects,
                 latency_ms=int((time.perf_counter() - t0) * 1000))

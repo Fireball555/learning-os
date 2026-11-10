@@ -619,3 +619,41 @@ def test_skeleton_keeps_join_chain():
         sk = skeleton(q)
         assert sk.count("___") >= q["sql"].upper().count("JOIN"), q["id"]
         assert sk.upper().count("JOIN") == q["sql"].upper().count("JOIN"), q["id"]
+
+
+def test_timeout_is_far_not_error():
+    from app.policy import closeness
+    assert closeness({"error": "Query took longer than 3 seconds and was stopped. (Missing a join condition?)"}) == "far"
+    assert closeness({"error": 'syntax error at or near "as"'}) == "error"
+
+
+def test_error_fallback_is_specific():
+    from app.assistant import deterministic_hint
+    q = {"skill": "S1", "sql": "select 1"}
+    t = deterministic_hint(q, 1, {"error": 'column "kochi" does not exist'}, mode="error")
+    assert "single quotes" in t
+    t = deterministic_hint(q, 1, {"error": 'column "o.order_id" must appear in the GROUP BY clause'}, mode="error")
+    assert "GROUP BY" in t and "o.order_id" in t
+
+
+def test_hint_rejects_are_logged(client, monkeypatch):
+    from app import assistant, db
+    from app.config import settings as s
+    monkeypatch.setattr(s, "admin_token", "t")
+    monkeypatch.setattr(s, "groq_api_key", "fake")
+    monkeypatch.setattr(assistant, "_llm", lambda s_, u, d=None: ("x" * 2000, "m1"))   # always too long
+    A = {"x-admin-token": "t"}
+    c = client.post("/api/admin/learners", json={"names": ["R"], "pilot": True}, headers=A).json()[0]
+    start_all(client, A)
+    lid = client.get("/api/admin/learners", headers=A).json()[0]["learner_id"]
+    k = {"Authorization": "Bearer " + c["code"]}
+    for q in client.get("/api/me", headers=k).json()["questions"]:
+        client.post(f"/api/questions/{q['id']}/submit", json={"sql": ""}, headers=k)
+    client.post("/api/admin/arm", json={"learner_id": lid, "arm": "tutor"}, headers=A)
+    client.post("/api/admin/phase", json={"learner_ids": [lid], "phase": "practice"}, headers=A)
+    client.post("/api/questions/T1/help", headers=k)
+    rows = db.q("SELECT payload FROM app.events WHERE kind='hint_reject'")
+    assert len(rows) == 2 and "too long" in rows[0]["payload"]["why"]
+    # tab switches are logged in practice too
+    client.post("/api/event", json={"kind": "hidden", "qid": "T1"}, headers=k)
+    assert db.q1("SELECT count(*) n FROM app.events WHERE kind='focus'")["n"] == 1

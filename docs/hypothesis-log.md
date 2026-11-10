@@ -16,8 +16,15 @@ For learners who already know single-table SQL, an assistant that caps how much 
 | 10 Nov | Every first hint is L1, and each level has strict written rules plus a deterministic shape check (length, no lists or headings, code limits, no snake_case schema names at L1); a reply that breaks them is retried once, then replaced by the built-in hint. | Live try-out: the first hint on T5 (labelled help 1, actually L2) was an 800-character plan listing every table, the join, all filters and the aggregation, effectively the answer in words. |
 | 10 Nov | Review round 4 fixes: a wrong column count is "close" only with the right row count; an error explanation no longer uses up L1; the leak guard checks the L3 sentence together with the skeleton; L1 checks match SQL keywords, not English words ("not included", "behaving"); the T8 skeleton keeps its join chain; each help request waits at most 20 s. | Independent review: `SELECT *` jumped straight to L4 and "Show solution" within 3 runs; an L3 sentence could fill every blank and pass; ordinary English L1 hints were rejected, which would have pushed the tutor arm's fallback share up. |
 
-## After the pilot (10 Nov)
-_Fill in: pilot pretest score, practice solved, hint levels used, confusing questions, and what we changed._
+## After the pilot / learner 1 (10 Nov)
+- **Learner 1** (real learner, tutor arm):
+  - Pretest: 0/6. She struggled with single-table syntax too (no FROM, double quotes for text). She found the pretest "a little frightening".
+  - Practice: solved 5/8 in 45 min, with 13 hints (L1–L2 only, no reveal). She said she would have finished the other 3 with more time. Return item 3/5.
+- **Evidence → change:**
+  - 31% of her hints were fallbacks, all error explanations, over the 20% limit. → Error hints were changed (Deviation 2).
+  - A timeout hint gave L4-level join structure at L1. → Timeouts now climb the ladder.
+- **Open question:** she wrote `LEFT JOIN … IS NULL` (T3) and `NOT IN (subquery)` (T8) without any hint teaching them. Did she get outside help, or did she already know them? → Tab switches are now logged in practice.
+- **Kept as is:** practice stays at 45 min, so that every learner, including her pair partner, has the same exposure.
 
 ## After the removal test (13 Nov) → v2
 _Fill in: the result under the pre-registered rule, then v2 of the hypothesis and the specific evidence (per-learner numbers, hint logs, observations) behind every word that changed._

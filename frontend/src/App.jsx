@@ -219,14 +219,13 @@ function Workspace({ me, refresh, isTest }) {
     return Math.min(cur + 1, n - 1)
   })
 
-  useEffect(() => {
-    if (!isTest) return
+  useEffect(() => {      // tab-switch log, in practice too (reported per learner, never enforced)
     const send = (kind) => api('/event', { method: 'POST', body: { kind, qid: q.id } }).catch(() => {})
     const onVis = () => send(document.hidden ? 'hidden' : 'visible')
     const onBlur = () => send('blur')
     document.addEventListener('visibilitychange', onVis); window.addEventListener('blur', onBlur)
     return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('blur', onBlur) }
-  }, [isTest, q.id])
+  }, [q.id])
 
   return (
     <div className="flex-1 flex flex-col md:flex-row min-h-0">

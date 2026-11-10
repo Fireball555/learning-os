@@ -19,6 +19,7 @@ No significance tests (n = 3 per arm).
 import argparse
 import csv
 import json
+import re
 import statistics as st
 from datetime import datetime
 from pathlib import Path
@@ -85,8 +86,10 @@ def main():
                  for q in PRIMARY_HELD + FAR
                  if q in views and views[q]["finished_at"] and q in subs and subs[q]["sql_text"].strip()
                  and not (subs[q].get("error") or "").endswith("(blank)")]   # real submits only
-        focus = sum(1 for e in d["events"] if e["kind"] == "focus" and e["payload"].get("learner_id") == lid
-                    and e["payload"].get("kind") == "hidden")
+        hidden = [e for e in d["events"] if e["kind"] == "focus" and e["payload"].get("learner_id") == lid
+                  and e["payload"].get("kind") == "hidden"]
+        focus = sum(1 for e in hidden if e["payload"].get("phase") in ("pretest", "heldout"))
+        focus_practice = sum(1 for e in hidden if e["payload"].get("phase") == "practice")
         surv = next((s["value"] for s in d["survey"] if s["learner_id"] == lid), None)
         llm_help = [h for h in real_help if h["source"].removesuffix("_error") in ("llm", "llm_retry", "fallback")]
         rows.append({
@@ -108,6 +111,7 @@ def main():
             "guard_blocks": sum(h["guard_blocked"] for h in hints),
             "median_sec_heldout_q": round(st.median(times)) if times else None,
             "tab_switches_tests": focus,
+            "tab_switches_practice": focus_practice,
             "return_1to5": surv,
         })
     if not rows:
@@ -143,11 +147,12 @@ def main():
         md.append(f"| {k} | {fmt(mean(t))} ({len(t)}) | {fmt(mean(b))} ({len(b)}) |")
 
     md += ["", "## Within-pair gain (tutor − baseline, points)"]
-    wins = losses = 0
+    wins = losses = complete = 0
     for p in sorted(pairs):
         t, b = pairs[p].get("tutor"), pairs[p].get("baseline")
         if t and b and t["gain_pts"] is not None and b["gain_pts"] is not None:
             diff = t["gain_pts"] - b["gain_pts"]
+            complete += 1
             wins += diff > 0
             losses += diff < 0
             md.append(f"- pair {p}: {diff:+.1f}")
@@ -156,16 +161,18 @@ def main():
 
     tg, bg = mean(arm_vals("tutor", "gain_pts")), mean(arm_vals("baseline", "gain_pts"))
     ts_, bs = mean(arm_vals("tutor", "practice_solved_8")), mean(arm_vals("baseline", "practice_solved_8"))
+    # pre-registered: at least two-thirds of the complete pairs (rounded up), and never fewer than 2
+    need = max(2, -(-2 * complete // 3))
     verdict = "inconclusive"
     if tg is not None and bg is not None:
-        if tg - bg >= 100 / 6 - 1e-9 and wins >= 2:
+        if tg - bg >= 100 / 6 - 1e-9 and wins >= need:
             verdict = "SUPPORTED (pre-registered rule)"
-        elif bg - tg >= 100 / 6 - 1e-9 and losses >= 2:
+        elif bg - tg >= 100 / 6 - 1e-9 and losses >= need:
             verdict = "FALSIFIED (pre-registered rule)"
     collapse = (ts_ is not None and bs and ts_ < 0.75 * bs)
     md += ["", "## Pre-registered decision",
            f"- mean gain: tutor {fmt(tg)} vs baseline {fmt(bg)} (difference {fmt(None if tg is None or bg is None else tg - bg)} pts; threshold 16.7)",
-           f"- pairs favouring tutor: {wins}, favouring baseline: {losses}",
+           f"- pairs favouring tutor: {wins}, favouring baseline: {losses} (of {complete} complete pairs; {need} needed)",
            f"- hypothesis on retention: **{verdict}**",
            f"- practice completion: tutor {fmt(ts_)} vs baseline {fmt(bs)} -> "
            f"{'**COLLAPSED** (< 0.75 x baseline)' if collapse else 'not collapsed'}"]
@@ -182,6 +189,18 @@ def main():
         for h in hs:
             mix[h.get("model") or "deterministic"] = mix.get(h.get("model") or "deterministic", 0) + 1
         md.append(f"  - models used ({arm}): " + ", ".join(f"{k} {v}" for k, v in sorted(mix.items(), key=lambda x: -x[1])))
+    ids = {l["learner_id"] for l in learners}
+    rej = [e["payload"] for e in d["events"] if e["kind"] == "hint_reject" and e["payload"].get("learner_id") in ids]
+    if rej:
+        md += ["", "## Why LLM replies were rejected (each was retried, then replaced by the built-in text)"]
+        for arm in ("tutor", "baseline"):
+            why = {}
+            for r in rej:
+                if r.get("arm") == arm:
+                    k = re.sub(r"\d+", "N", str(r.get("why", "?")))[:80]
+                    why[k] = why.get(k, 0) + 1
+            if why:
+                md.append(f"- {arm}: " + "; ".join(f"{k} x{v}" for k, v in sorted(why.items(), key=lambda x: -x[1])))
     if excluded:
         md += ["", f"Excluded learners (reported, not analysed): {len(excluded)}"]
     (out / "results.md").write_text("\n".join(md) + "\n")

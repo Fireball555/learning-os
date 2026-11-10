@@ -56,6 +56,10 @@ def closeness(last_attempt) -> str:
     if not last_attempt:
         return "none"
     if last_attempt.get("error"):
+        # a timeout is almost always a missing join condition (rows multiplied): a concept problem,
+        # not a typo, so it climbs the ladder like any wrong attempt instead of getting an error explanation
+        if str(last_attempt["error"]).startswith("Query took longer than"):
+            return "far"
         return "error"
     if last_attempt.get("correct"):
         return "correct"

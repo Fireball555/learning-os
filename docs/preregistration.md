@@ -20,17 +20,17 @@ This is updated live during practice.
 
 | Outcome | Condition |
 |---|---|
-| **Supported** | Tutor mean gain − baseline mean gain ≥ 16.7 points (one item), **and** the tutor learner out-gains the baseline learner in at least 2 of the 3 pairs. |
-| **Falsified** | The mirror image: baseline ahead by ≥ 16.7 points **and** wins at least 2 of 3 pairs. |
-| **Inconclusive** | Anything else. Reported as "no evidence either way at n = 6". |
+| **Supported** | Tutor mean gain − baseline mean gain ≥ 16.7 points (one item), **and** the tutor learner out-gains the baseline learner in at least two-thirds of the complete pairs (rounded up, and at least 2). With 3 pairs that is 2, with 4 it is 3, with 5 it is 4. |
+| **Falsified** | The mirror image: baseline ahead by ≥ 16.7 points **and** wins in at least two-thirds of the complete pairs. |
+| **Inconclusive** | Anything else. Reported as "no evidence either way at n = <final n>". |
 
 **Completion collapses** if the tutor arm's mean practice questions solved is below 0.75 × the baseline arm's mean. A collapse is reported next to the retention result, whatever that result is.
 
 ## Design
-- 6 learners, none on the team. 1 pilot, excluded from all results.
+- At least 6 learners (about 9 expected), none on the team. Pilot runs are excluded from all results. The final n is whoever turns up to practice; a pair is complete when both members take the removal test. A complete pair is a tutor learner and a baseline learner who both finished the pretest and the removal test.
 - **The pilot does NOT see the held-out set before 13 Nov.** The held-out flow is checked with a throwaway learner that the experimenter runs alone.
-- Between subjects, 3 tutor vs 3 baseline.
-  - Learners are ranked by pretest score and paired 1–2, 3–4, 5–6.
+- Between subjects, tutor vs baseline, with equal numbers in each arm (± 1 with an odd total).
+  - Learners are ranked by pretest score and paired with their neighbour (1–2, 3–4, …).
   - A coin flip within each pair (`secrets.randbelow`) decides who gets which arm.
   - Score ties are broken by a random draw. Draws and flips are logged in `app.events`.
   - A no-show is excluded before assignment and logged with the reason.
@@ -82,21 +82,30 @@ Held-out items are labelled near or far transfer in `question_bank.py`. H1–H6 
 - Share of LLM fallbacks per arm
 - Guard blocks
 - Median seconds per held-out question (wall clock from first opening the question to submitting it)
-- Tab-switch events during test phases
+- Tab-switch events during test phases (also logged in practice, reported separately)
 - The return item, 1–5: "How likely are you to open this tomorrow?"
 
 ## Reporting rules
 - Report every learner's raw numbers, including null or negative results.
-- No significance tests at n = 3 per arm.
+- No significance tests at this sample size.
 - A dropout after assignment is reported as a dropout. The learner is not replaced, and the metrics show n for each arm.
 - If more than 20% of an arm's help replies are fallbacks (LLM down or rate-limited), report it as a deviation.
 - Self-report, collected on paper before the removal test: "Since practice, did you practise joins, use ChatGPT for SQL, or discuss the practice questions?" Reported per learner.
 
 ## Known limitations (stated in advance)
-- n = 6, so only a large effect is detectable.
+- n is small (6 to 10), so only a large effect is detectable.
 - A 2-day gap measures short-term retention, not the 6-week case in the brief.
 - Learners are classmates and may talk between sessions.
 - The baseline is an idealised answer button with no follow-up dialogue.
 
 ## Deviations
-_(none yet)_
+1. **Learner 1 ran before the `prereg` tag (10 Nov).** Learner 1 (tutor arm, unpaired solo arrival) took the pretest and practice on 10 Nov before this file was tagged. The questions, the decision rules and `analyze.py`'s scoring were the same as in the tagged commit.
+2. **Error hints changed after learner 1 (10 Nov).**
+   - What changed:
+     - an error explanation may be up to 900 characters (was 650), may fix only the part of the query the error points at, and never the whole query;
+     - the built-in fallback now explains the specific PostgreSQL error (misspelt name, GROUP BY, missing FROM entry, quotes, ...) instead of giving a generic text;
+     - a query timeout (usually a missing join condition) is treated as a wrong attempt that climbs the ladder, not as an SQL error;
+     - the reason for every rejected LLM reply is logged;
+     - tab switches are also logged in practice.
+   - Why: in learner 1's practice, 4 of 13 tutor hints (31%) were fallbacks, all of them error explanations, which is above the 20% limit. One error hint for a timeout gave the full `JOIN … ON` structure at L1.
+   - Learner 1 got the earlier version. Their partner and every later learner get this one. This is reported next to learner 1's numbers.

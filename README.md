@@ -5,7 +5,7 @@
 When a learner pastes a question into a chatbot, they get the full query in four seconds, and six weeks later they can't start one alone. This project tests the alternative. An adaptive SQL tutor caps how much it reveals, based on what each learner has already shown they can do unaided. Then a **removal test** checks what they can do with the assistant gone, compared against learners who used an ordinary answer-giving assistant.
 
 > 100xEngineers C7 Capstone · Module 3 · Learning OS brief
-> Status: the study runs 11 Nov (pretest + practice) and 13 Nov (removal test). Results go in `results/` and the case study.
+> Status: the study runs 10 Nov (pretest + practice) and 13 Nov (removal test). Results go in `results/` and the case study.
 
 ---
 
@@ -14,12 +14,12 @@ When a learner pastes a question into a chatbot, they get the full query in four
 | | |
 |---|---|
 | **Hypothesis (v1)** | Help capped at what the learner can already do unaided leads to higher scores on held-out multi-table questions, with no assistant, than an assistant that gives the full query on request. Practice completion stays comparable. |
-| **Learners** | 6 people, none on the team, who know SELECT/WHERE/GROUP BY but have not been taught joins. 1 extra pilot is excluded from results. |
+| **Learners** | At least 6 people (about 9 expected), none on the team, who know SELECT/WHERE/GROUP BY but have not been taught joins. Pilot runs are excluded from results. |
 | **Arms** | **Tutor**: a hint ladder that never gives the query. **Baseline**: the full correct query on every request. Same app, model, UI and button. |
 | **Assignment** | Rank by pretest score, pair neighbours, then a coin flip inside each pair. |
 | **Sessions** | Pretest 15 min, then practice 45 min, then (2 days later) removal test 30 min. All three are timed by the server. |
 | **Primary metric** | Skill-matched gain: (held-out H1–H6 correct ÷ 6) − (pretest P1–P6 correct ÷ 6). |
-| **Decision rule** | **Supported**: the tutor mean gain is at least 1 question higher than baseline, **and** the tutor learner wins in ≥ 2 of 3 pairs. The mirror image is **falsified**; anything else is inconclusive. |
+| **Decision rule** | **Supported**: the tutor mean gain is at least 1 question higher than baseline, **and** the tutor learner wins in at least two-thirds of the pairs. The mirror image is **falsified**; anything else is inconclusive. |
 | **Collapse check** | Tutor practice completion below 0.75 × baseline means completion has collapsed. |
 
 Full pre-registration: [`docs/preregistration.md`](docs/preregistration.md). Session procedure: [`docs/runbook.md`](docs/runbook.md).

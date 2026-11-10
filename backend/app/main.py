@@ -390,6 +390,8 @@ def help_(qid: str, L=Depends(learner)):
           (lid, qid, L["arm"], stored, st["attempts"], mastered, r["text"],
            r["source"] if d.mode == "normal" else r["source"] + "_error",
            r["guard_blocked"], r["model"], r["latency_ms"]))
+    for rj in r.get("rejects") or []:
+        event("hint_reject", {"learner_id": lid, "qid": qid, "arm": L["arm"], "level": d.level, "mode": d.mode, **rj})
     st2 = _help_state(L, q)
     return {"text": r["text"], "reveal_available": _can_reveal(L, st2)}
 
@@ -433,8 +435,8 @@ class ClientEvent(BaseModel):
 
 @app.post("/api/event")
 def client_event(body: ClientEvent, L=Depends(learner)):
-    """Tab-switch / focus-loss log in test phases (reported per learner, not enforced)."""
-    if L["phase"] in TEST_PHASES:
+    """Tab-switch / focus-loss log in every phase with questions (reported per learner, not enforced)."""
+    if L["phase"] in TEST_PHASES or L["phase"] == "practice":
         event("focus", {"learner_id": L["learner_id"], "phase": L["phase"], "kind": body.kind, "qid": body.qid})
     return {"ok": True}
 
@@ -642,8 +644,9 @@ def export(_=Depends(admin)):
 @app.get("/api/admin/stats")
 def stats(_=Depends(admin)):
     """Live check during a session: is the LLM answering, or are we on fallbacks (e.g. Groq rate limits)?"""
-    rows = db.q("""SELECT h.arm, count(*) FILTER (WHERE h.level >= 1) AS help,
-                          count(*) FILTER (WHERE h.level >= 1 AND h.source = 'fallback') AS fallback,
+    rows = db.q("""SELECT h.arm, count(*) FILTER (WHERE h.level BETWEEN 1 AND 4 OR h.level = 9) AS help,
+                          count(*) FILTER (WHERE (h.level BETWEEN 1 AND 4 OR h.level = 9)
+                                           AND h.source IN ('fallback', 'fallback_error')) AS fallback,
                           COALESCE(sum(h.guard_blocked), 0) AS blocked
                    FROM app.hints h JOIN app.learners l ON l.learner_id = h.learner_id
                    WHERE NOT l.is_pilot GROUP BY h.arm""")

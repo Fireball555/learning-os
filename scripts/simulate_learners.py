@@ -39,7 +39,8 @@ Q = {q["id"]: q for q in json.loads(settings.questions_json.read_text())}
 
 # construct -> (regex on the learner's SQL, regex on hint text that "teaches" it)
 CONSTRUCTS = {
-    "join":      (r"\bjoin\b", r"\bjoin\b"),
+    # a comma list in FROM ("FROM customers c, orders o") is a join too
+    "join":      (r"\bjoin\b|\bfrom\s+[\w.]+(\s+(as\s+)?\w+)?\s*,\s*[\w.]+", r"\bjoin\b"),
     "left join": (r"\b(left|right|full)\s+(outer\s+)?join\b", r"\b(left|outer)\s+join\b|\bleft\b"),
     "exists":    (r"\bexists\b", r"\bexists\b"),
     "not in":    (r"\bnot\s+in\s*\(", r"\bnot\s+in\b"),
@@ -171,13 +172,13 @@ def simulate(persona_name, qids, model, max_runs, budget, mastered_skills, verbo
             bad = unknown_constructs(sql, p["knows"], hints)
             if bad:
                 rejected += 1
-                if rejected > 3:
-                    result = "out of character"
-                    break
-                ctx += f"\n\n(You don't know {', '.join(bad)} yet and no hint has taught it. Try with what you know.)"
+                ctx += (f"\n\n(You don't know {', '.join(bad)} and no hint has taught it. Write your best attempt "
+                        "using ONLY what you know, even if you suspect it is wrong.)")
                 sql = extract_sql(learner_llm(model, system, ctx))
                 if unknown_constructs(sql, p["knows"], hints):
-                    continue
+                    # still out of character: behave like a lost student who runs something simple
+                    first = q["sql"].split("FROM", 1)[1].split()[0] if "FROM" in q["sql"] else "shop.customers"
+                    sql = f"select * from {first}"
             att, res = run_attempt(q, sql)
             st["attempts"] += 1
             st["since"] += 1
@@ -195,7 +196,7 @@ def simulate(persona_name, qids, model, max_runs, budget, mastered_skills, verbo
         out.append(dict(q=qid, result=result, runs=st["attempts"], levels=" ".join(levels) or "-",
                         fallbacks=fallbacks, rejected=rejected))
         print(f"  {persona_name:7s} {qid}: {result:16s} runs={st['attempts']} hints={' '.join(levels) or '-'}"
-              f" fallbacks={fallbacks} out-of-character={rejected}", flush=True)
+              f" fallbacks={fallbacks} out-of-character attempts={rejected}", flush=True)
     return out
 
 
@@ -225,7 +226,8 @@ def main():
         fb = sum(r["fallbacks"] for r in rs)
         nh = sum(len(r["levels"].split()) for r in rs if r["levels"] != "-")
         print(f"  {p:7s} solved {count('solved')}/{n} | reached Show solution {count('REVEAL')}/{n} | "
-              f"gave up {count('gave up')} | fallback hints {fb}/{nh} | out of character {count('out of character')}")
+              f"not solved in {a.max_runs} runs {count('gave up')} | fallback hints {fb}/{nh} | "
+              f"out-of-character attempts {sum(r['rejected'] for r in rs)}")
     print(f"tokens: learner {TOKENS['learner']}, tutor ~{TOKENS['tutor_est']} (estimate)")
     print("Rule of thumb: Show solution on more than 2 of 8 questions = the ladder is too slow.")
 
