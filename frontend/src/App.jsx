@@ -6,6 +6,7 @@ import { Prec } from '@codemirror/state'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { tags as t } from '@lezer/highlight'
 import { api, getCode, setCode } from './api.js'
+import ThemeToggle from './ThemeToggle.jsx'
 
 const FINISHED = ['submitted', 'solved', 'revealed']
 
@@ -73,6 +74,7 @@ export default function App() {
         <div className="flex items-center gap-4 text-sm t-muted">
           {me.deadline && <Countdown deadline={me.deadline} offset={offset} />}
           <span>Logged in as <b style={{ color: 'var(--text)' }}>{me.name}</b></span>
+          <ThemeToggle />
           <button className="btn btn-ghost" onClick={() => { setCode(''); setMe(null) }}>Log out</button>
         </div>
       </header>
@@ -188,7 +190,8 @@ function Login({ onDone, notice }) {
     setBusy(false)
   }
   return (
-    <div className="h-full flex items-center justify-center px-4">
+    <div className="h-full flex items-center justify-center px-4 relative">
+      <ThemeToggle className="absolute top-4 right-4" />
       <form onSubmit={submit} className="w-full max-w-sm card bd rad p-8 space-y-4 shadowed">
         <h1 className="f-head text-2xl font-bold">Learning OS · SQL</h1>
         <label className="block text-sm t-muted" htmlFor="code">Enter the code on your slip</label>

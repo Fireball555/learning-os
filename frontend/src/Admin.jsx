@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from './api.js'
+import ThemeToggle from './ThemeToggle.jsx'
 
 const PHASES = ['pretest', 'practice', 'break', 'heldout', 'done']
 const MINUTES = { pretest: 15, practice: 45, heldout: 30 }
@@ -77,6 +78,7 @@ export default function Admin() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="f-head text-2xl font-bold">Invigilator console</h1>
         <div className="flex gap-2">
+          <ThemeToggle />
           <button onClick={download} className="btn btn-ghost">Download export</button>
           <button onClick={() => { try { sessionStorage.removeItem(TK) } catch {} setTok('') }} className="btn btn-ghost">Lock</button>
         </div>

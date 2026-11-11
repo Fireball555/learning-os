@@ -1,5 +1,6 @@
 // Six themes. The study uses ONE (DEFAULT_THEME) for every learner in both arms.
-// ?theme=<id> overrides it for previews only; there is no visible toggle for learners.
+// ?theme=<id> overrides it for previews only. Light/dark is the learner's own choice (button in the header),
+// remembered per browser; it changes colours only, never layout or content, in both arms alike.
 export const THEMES = {
   ember: {
     label: 'Ember', fonts: 'family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500',
@@ -53,20 +54,71 @@ export const THEMES = {
 
 export const DEFAULT_THEME = import.meta.env.VITE_THEME || 'ember'
 
+// Dark variant of each light theme that needs one (same fonts, radius and layout; colours only).
+const DARK = {
+  ember: { bg: '#121110', panel: '#161514', card: '#1B1918', border: '#2F2C2A', text: '#F5F5F4', muted: '#A8A29E',
+    accent: '#FF6A00', onAccent: '#0C0A09', accentText: '#FF8A3D', primary: '#F5F5F4', onPrimary: '#0C0A09',
+    editorBg: '#0B0A09', editorText: '#E7E5E4', editorGutter: '#57534E', editorLine: '#1C1917', kw: '#FF8A3D', fn: '#FDBA74', str: '#A3E635', num: '#FCD34D',
+    warnBg: '#2B1A0B', warnText: '#FDBA74', okBg: '#0E2A1E', okText: '#6EE7B7', errBg: '#2E1415', errText: '#FCA5A5',
+    hintBg: '#1B1918', hintBorder: '#78716C', chip: '#24211F' },
+}
+
+const MODE_KEY = 'los_mode'
+let current = { id: DEFAULT_THEME, mode: 'light' }
+
+function systemMode() {
+  try { return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light' } catch { return 'light' }
+}
+
+export function getMode() { return current.mode }
+export function canToggle() { return !!DARK[current.id] }
+
+function paint() {
+  const t = THEMES[current.id] || THEMES.ember
+  const v = current.mode === 'dark' && DARK[current.id] ? { ...t.v, ...DARK[current.id] } : t.v
+  const root = document.documentElement
+  for (const [k, val] of Object.entries(v)) {
+    if (typeof val === 'string') root.style.setProperty('--' + k.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase()), val)
+  }
+  root.style.setProperty('--border-w', v.borderW || '1px')
+  const dark = current.mode === 'dark' || ['terminal', 'blueprint'].includes(current.id)
+  root.style.colorScheme = dark ? 'dark' : 'light'      // native scrollbars, checkboxes, inputs follow
+  root.dataset.mode = dark ? 'dark' : 'light'
+  let meta = document.querySelector('meta[name="theme-color"]')
+  if (!meta) { meta = document.createElement('meta'); meta.name = 'theme-color'; document.head.appendChild(meta) }
+  meta.content = v.card
+}
+
+export function setMode(mode) {
+  if (!DARK[current.id] || mode === current.mode) return
+  const root = document.documentElement
+  let reduce = false
+  try { reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch {}
+  if (!reduce) {
+    root.classList.add('theme-anim')
+    clearTimeout(setMode._t)
+    setMode._t = setTimeout(() => root.classList.remove('theme-anim'), 400)
+  }
+  current = { ...current, mode }
+  try { localStorage.setItem(MODE_KEY, mode) } catch {}
+  paint()
+  window.dispatchEvent(new CustomEvent('los-mode', { detail: mode }))
+}
+
 export function applyTheme() {
   let id = DEFAULT_THEME
   try { const q = new URLSearchParams(window.location.search).get('theme'); if (q && THEMES[q]) id = q } catch {}
-  const t = THEMES[id] || THEMES.ember
+  if (!THEMES[id]) id = 'ember'
+  let mode = systemMode()
+  try { const m = localStorage.getItem(MODE_KEY); if (m === 'light' || m === 'dark') mode = m } catch {}
+  current = { id, mode: DARK[id] ? mode : 'light' }
+  paint()
   const root = document.documentElement
-  for (const [k, val] of Object.entries(t.v)) {
-    if (typeof val === 'string') root.style.setProperty('--' + k.replace(/[A-Z]/g, (m) => '-' + m.toLowerCase()), val)
-  }
-  root.style.setProperty('--border-w', t.v.borderW || '1px')
   root.dataset.theme = id
-  if (t.v.grid) root.dataset.grid = '1'
+  if (THEMES[id].v.grid) root.dataset.grid = '1'
   const link = document.createElement('link')
   link.rel = 'stylesheet'
-  link.href = `https://fonts.googleapis.com/css2?${t.fonts}&display=swap`
+  link.href = `https://fonts.googleapis.com/css2?${THEMES[id].fonts}&display=swap`
   document.head.appendChild(link)
   return id
 }

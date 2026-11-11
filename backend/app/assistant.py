@@ -140,7 +140,9 @@ def shape_problem(text, level, mode="normal", attempt=None, question=None):
         return "uses a list or headings; write one short paragraph"
     if not lim["fence"] and "```" in text:
         return "contains a code block; no code block at this level"
-    if len(re.findall(r"`[^`\n]+`", _SQL_SPAN.sub(" ", text))) > lim["code"]:
+    # a backticked bare name (`products`, `c.name`, `JOIN`) is not a code fragment; only real snippets count
+    snippets = [x for x in re.findall(r"`([^`\n]+)`", _SQL_SPAN.sub(" ", text)) if not re.fullmatch(r"\s*[\w.]+\s*", x)]
+    if len(snippets) > lim["code"]:
         return "contains too many code fragments"
     if level == 1 or mode == "error":
         new = new_features(text, features_used(own_sql, err))
