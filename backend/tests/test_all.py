@@ -239,7 +239,7 @@ def test_full_flow(client, monkeypatch):
     # practice before arms -> refused
     ids = [x["learner_id"] for x in client.get("/api/admin/learners", headers=A).json()]
     assert client.post("/api/admin/phase", json={"learner_ids": ids, "phase": "practice"}, headers=A).status_code == 400
-    log = client.post("/api/admin/assign", headers=A).json()
+    log = client.post("/api/admin/assign", headers=A).json()["pairs"]
     assert len(log) == 3
     ls = client.get("/api/admin/learners", headers=A).json()
     assert sorted(x["arm"] for x in ls) == ["baseline"] * 3 + ["tutor"] * 3
@@ -251,7 +251,7 @@ def test_full_flow(client, monkeypatch):
     for l in ls:
         k = l["code"]
         r = client.post("/api/questions/T4/help", headers=H(k)).json()
-        assert set(r) == {"text", "reveal_available"}   # same keys for both arms: nothing reveals the arm
+        assert set(r) == {"text", "reveal_available", "needs_run"}   # same keys for both arms: nothing reveals the arm
         if l["arm"] == "baseline":
             assert "```sql" in r["text"]
         else:
@@ -421,7 +421,7 @@ def test_single_latecomer_gets_arm(client, monkeypatch):
     for q in client.get("/api/me", headers=H(c["code"])).json()["questions"]:
         client.post(f"/api/questions/{q['id']}/submit", json={"sql": ""}, headers=H(c["code"]))
     r = client.post("/api/admin/assign", headers=A)
-    assert r.status_code == 200 and r.json()[0]["unpaired"]
+    assert r.status_code == 200 and r.json()["pairs"][0]["unpaired"]
     assert client.post("/api/admin/exclude", json={"learner_id": 999, "reason": "x"}, headers=A).status_code == 404
     assert client.post("/api/admin/phase", json={"learner_ids": [999], "phase": "done"}, headers=A).status_code == 404
 
@@ -442,7 +442,7 @@ def test_timer_deadlines_and_autofill(client, monkeypatch):
     assert client.post("/api/questions/P2/run", json={"sql": "select 1"}, headers=H(codes[0]["code"])).status_code == 410
     assert client.post("/api/questions/P2/submit", json={"sql": "select 1"}, headers=H(codes[0]["code"])).status_code == 410
     # assign fills the missing answers with blanks, so nobody blocks the session
-    log = client.post("/api/admin/assign", headers=A).json()
+    log = client.post("/api/admin/assign", headers=A).json()["pairs"]
     assert len(log) == 1
     n = db.q1("SELECT count(*) n FROM app.attempts WHERE kind='submit' AND error='time-up (blank)'")["n"]
     assert n == 11
@@ -589,7 +589,7 @@ def test_hint_shape_check(monkeypatch):
     assert shape_problem(long_plan, 1) and shape_problem(long_plan, 2)
     assert shape_problem("Join order_items to products.", 1)            # L1 may not name columns/tables
     assert shape_problem("Think about which rows to keep: only some orders count, from one year.", 1) is None
-    assert shape_problem("x" * 300, 1)                                   # too long for L1
+    assert shape_problem("x" * 400, 1)                                   # too long for L1
     # a too-detailed LLM reply is retried, then replaced by the deterministic hint
     monkeypatch.setattr(assistant.settings, "groq_api_key", "x")
     monkeypatch.setattr(assistant, "_llm", lambda s, u, d=None: (long_plan, "m1"))
@@ -657,3 +657,83 @@ def test_hint_rejects_are_logged(client, monkeypatch):
     # tab switches are logged in practice too
     client.post("/api/event", json={"kind": "hidden", "qid": "T1"}, headers=k)
     assert db.q1("SELECT count(*) n FROM app.events WHERE kind='focus'")["n"] == 1
+
+
+def test_v2_vocabulary_rules():
+    from app.assistant import shape_problem
+    q = {"prompt": "List products sold below price.", "sql": "select 1"}
+    att = {"sql_text": "select p.product_id, p.name ,count(o.order_id) as ocount from products p inner join "
+                       "order_items o on p.product_id=o.product_id where ocount=0", "error": 'column "ocount" does not exist'}
+    # error hint that slips in HAVING (not in their query, not in the error) is rejected
+    leak = ("The alias `ocount` isn't visible in WHERE. Move the filter to a HAVING: "
+            "```sql\nHAVING COUNT(o.order_id) = 0\n```")
+    assert "having" in shape_problem(leak, 1, "error", att, q)
+    # a clean error explanation using only their own SQL passes
+    ok = "The alias `ocount` is defined in SELECT, and WHERE runs before SELECT, so it can't see it. Look at `where ocount=0`."
+    assert shape_problem(ok, 1, "error", att, q) is None
+    # L1 may quote their own clause and name their own columns
+    att2 = {"sql_text": "SELECT DISTINCT p.product_id, p.name FROM products p JOIN order_items o ON p.product_id = p.product_id",
+            "error": None}
+    l1 = "Your `ON p.product_id = p.product_id` compares a column with itself. What should product_id be compared with?"
+    assert shape_problem(l1, 1, "normal", att2, q) is None
+    # ...but not introduce a feature they haven't used
+    assert "not exists" in (shape_problem("Products that never appear need a NOT EXISTS check. Which ones?", 1, "normal", att2, q) or "").replace("exists", "not exists")
+    # and not quote code they didn't write
+    assert shape_problem("Try `LEFT JOIN order_items o USING (product_id)`?", 1, "normal", att2, q)
+
+
+def test_help_locked_until_new_run_and_assign_skips_and_delete(client, monkeypatch):
+    from app import db
+    from app.config import settings as s
+    monkeypatch.setattr(s, "admin_token", "t")
+    A = {"x-admin-token": "t"}
+    H = lambda k: {"Authorization": "Bearer " + k}
+    cs = client.post("/api/admin/learners", json={"names": ["done1", "slow", "noshow"]}, headers=A).json()
+    ids = {c["display_name"]: c["learner_id"] for c in client.get("/api/admin/learners", headers=A).json()}
+    client.post("/api/admin/phase", json={"learner_ids": [ids["done1"], ids["slow"]], "phase": "pretest"}, headers=A)
+    k1 = cs[0]["code"]
+    for q in client.get("/api/me", headers=H(k1)).json()["questions"]:
+        client.post(f"/api/questions/{q['id']}/submit", json={"sql": ""}, headers=H(k1))
+    # assign takes only the finished learner; the others are listed as skipped
+    r = client.post("/api/admin/assign", headers=A).json()
+    assert [p.get("tutor") or p.get("baseline") for p in r["pairs"]] == [ids["done1"]]
+    assert set(r["skipped"]) == {"slow", "noshow"} and r["summary"]
+    # delete: only a never-started learner
+    assert client.post("/api/admin/delete", json={"learner_id": ids["done1"]}, headers=A).status_code == 409
+    assert client.post("/api/admin/delete", json={"learner_id": ids["slow"]}, headers=A).status_code == 409   # already started
+    assert client.post("/api/admin/delete", json={"learner_id": ids["noshow"]}, headers=A).status_code == 200
+    assert ids["noshow"] not in {x["learner_id"] for x in client.get("/api/admin/learners", headers=A).json()}
+    # help lock: after a hint, no new help until a new run (same in both arms)
+    db.ex("UPDATE app.learners SET arm='tutor' WHERE learner_id=%s", (ids["done1"],))
+    client.post("/api/admin/phase", json={"learner_ids": [ids["done1"]], "phase": "practice"}, headers=A)
+    h = client.post("/api/questions/T1/help", headers=H(k1)).json()
+    assert h["needs_run"] is True
+    assert client.get("/api/questions/T1/hints", headers=H(k1)).json()["needs_run"] is True
+    h2 = client.post("/api/questions/T1/help", headers=H(k1)).json()
+    assert h2["text"].startswith("Run a new attempt first")
+    assert db.q1("SELECT level FROM app.hints ORDER BY hint_id DESC LIMIT 1")["level"] == -1
+    r = client.post("/api/questions/T1/run", json={"sql": "select 1"}, headers=H(k1)).json()
+    assert r["needs_run"] is False and client.get("/api/questions/T1/hints", headers=H(k1)).json()["needs_run"] is False
+
+
+def test_v2_review_fixes():
+    from app.assistant import shape_problem, deterministic_hint
+    q = {"prompt": "x", "sql": "select 1", "skill": "S3"}
+    att = {"sql_text": "SELECT c.customer_id, c.name, SUM(SELECT 1 FROM orders o WHERE o.customer_id = c.customer_id) "
+                       "FROM customers c", "error": 'syntax error at or near "SELECT"'}
+    # rewriting their SUM(SELECT 1 ...) into the correct correlated subquery is rejected
+    assert shape_problem("Write it as:\n```sql\n(SELECT COUNT(*) FROM orders o WHERE o.customer_id = c.customer_id)\n```",
+                         1, "error", att, q)
+    # a block that rewrites the join chain is rejected
+    att7 = {"sql_text": "SELECT c.customer_id FROM customers c LEFT JOIN orders o ON c.customer_id = o.customer_id "
+                        "order_items oi on o.order_id = oi.order_id", "error": 'syntax error at or near "order_items"'}
+    assert shape_problem("Add the keyword:\n```sql\nLEFT JOIN orders o ON c.customer_id = o.customer_id\n"
+                         "LEFT JOIN order_items oi ON o.order_id = oi.order_id\n```", 1, "error", att7, q)
+    # the built-in aggregate-in-WHERE text no longer names HAVING
+    t = deterministic_hint(q, 1, {"error": "aggregate functions are not allowed in WHERE"}, mode="error")
+    assert "HAVING" not in t.upper()
+    # plain-English "is null" and "cross join" about a comma join are fine at L1
+    a2 = {"sql_text": "select c.customer_id, count(o.order_id) from customers c, orders o group by c.customer_id", "error": None}
+    assert shape_problem("Listing two tables with a comma makes a cross join: every customer meets every order. Which pairs belong together?", 1, "normal", a2, q) is None
+    assert shape_problem("What happens to a row where o.status is null?", 1, "normal", a2, q) is None
+    assert shape_problem("Could you keep only the zero groups using having?", 1, "normal", a2, q)

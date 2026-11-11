@@ -355,6 +355,7 @@ function Editor({ q, me, isTest, refresh, onNext }) {
   const [hints, setHints] = useState([])
   const [hintBusy, setHintBusy] = useState(false)
   const [canReveal, setCanReveal] = useState(false)
+  const [needsRun, setNeedsRun] = useState(false)     // help unlocks again after a new run (both arms)
   const [confirmReveal, setConfirmReveal] = useState(false)
   const codeRef = useRef(code)
   codeRef.current = code
@@ -364,7 +365,7 @@ function Editor({ q, me, isTest, refresh, onNext }) {
   useEffect(() => { api(`/questions/${q.id}/view`, { method: 'POST' }).catch(() => {}) }, [q.id])
   useEffect(() => {
     if (!me.help_available) return
-    api(`/questions/${q.id}/hints`).then((d) => { setHints(d.hints); setCanReveal(d.reveal_available) }).catch(() => {})
+    api(`/questions/${q.id}/hints`).then((d) => { setHints(d.hints); setCanReveal(d.reveal_available); setNeedsRun(!!d.needs_run) }).catch(() => {})
   }, [q.id, me.help_available])
   useEffect(() => { hintEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }) }, [hints.length])
   useEffect(() => {   // Ctrl/Cmd+Enter runs the query even when focus is outside the editor
@@ -384,6 +385,7 @@ function Editor({ q, me, isTest, refresh, onNext }) {
       const r = await api(`/questions/${q.id}/run`, { method: 'POST', body: { sql: codeRef.current } })
       setRes(r)
       if (typeof r.reveal_available === 'boolean') setCanReveal(r.reveal_available)
+      if (!isTest) setNeedsRun(false)
       if (r.correct) refresh()
     } catch (e) { setRes({ error: friendly(e), infra: true }) }
     setBusy(false)
@@ -406,7 +408,7 @@ function Editor({ q, me, isTest, refresh, onNext }) {
 
   const help = async () => {
     setHintBusy(true)
-    try { const h = await api(`/questions/${q.id}/help`, { method: 'POST' }); setHints((x) => [...x, { text: h.text }]); setCanReveal(h.reveal_available) }
+    try { const h = await api(`/questions/${q.id}/help`, { method: 'POST' }); setHints((x) => [...x, { text: h.text }]); setCanReveal(h.reveal_available); setNeedsRun(!!h.needs_run) }
     catch (e) { setHints((x) => [...x, { text: friendly(e), error: true }]) }
     setHintBusy(false)
   }
@@ -447,11 +449,14 @@ function Editor({ q, me, isTest, refresh, onNext }) {
               <button onClick={() => setConfirmReveal(false)} className="btn btn-ghost">Keep trying</button>
             </span>)}
         {me.help_available && (
-          <button onClick={help} disabled={hintBusy || solved || res?.correct}
-            title={solved || res?.correct ? 'Already solved' : undefined}
-            className={`btn btn-outline ${canReveal && !(solved || res?.correct) ? '' : 'ml-auto'}`}>
-            {hintBusy ? 'Thinking…' : solved || res?.correct ? (status === 'revealed' ? 'Solution shown' : 'Solved ✓') : 'Get help'}
-          </button>
+          <span className={`flex items-center gap-2 ${canReveal && !(solved || res?.correct) ? '' : 'ml-auto'}`}>
+            {needsRun && !hintBusy && !(solved || res?.correct) && <span className="text-xs t-muted">Run a new attempt to unlock more help</span>}
+            <button onClick={help} disabled={hintBusy || solved || res?.correct || needsRun}
+              title={solved || res?.correct ? 'Already solved' : needsRun ? 'Run a new attempt first' : undefined}
+              className="btn btn-outline">
+              {hintBusy ? 'Thinking…' : solved || res?.correct ? (status === 'revealed' ? 'Solution shown' : 'Solved ✓') : 'Get help'}
+            </button>
+          </span>
         )}
       </div>
       <div className="flex-[4] min-h-0 flex flex-col lg:flex-row">

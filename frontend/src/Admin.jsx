@@ -113,7 +113,12 @@ export default function Admin() {
                       onClick={() => act(() => api('/admin/arm', { method: 'POST', admin: tok, body: { learner_id: r.learner_id, arm: a } }))}>{a}</button>)}
                   </span>}</td>
                 <td>{r.pair_no ?? ''}</td><td>{r.phase} <span className="t-muted text-xs">{left(r)}</span></td><td>{r.finished_in_phase}</td>
-                <td>{!r.excluded && <button className="text-xs underline t-muted" onClick={() => act(async () => {
+                <td>{!r.arm && r.phase === 'waiting' && r.pretest_done === 0 && <button className="text-xs underline t-muted mr-3" onClick={() => act(async () => {
+                  if (!window.confirm(`Delete ${r.display_name}? Only possible because they never started.`)) return 'Cancelled.'
+                  await api('/admin/delete', { method: 'POST', admin: tok, body: { learner_id: r.learner_id } })
+                  return `Deleted ${r.display_name}.`
+                })}>delete</button>}
+                {!r.excluded && <button className="text-xs underline t-muted" onClick={() => act(async () => {
                   const reason = window.prompt(`Exclude ${r.display_name}? Their code stops working. Reason (e.g. no-show):`)
                   if (!reason) return 'Cancelled.'
                   await api('/admin/exclude', { method: 'POST', admin: tok, body: { learner_id: r.learner_id, reason } })
@@ -131,7 +136,7 @@ export default function Admin() {
           <button key={p} disabled={!sel.length || busy} className="btn btn-ghost" onClick={() => movePhase(p)}>{p}</button>
         ))}
         <button disabled={busy} className="ml-auto btn btn-accent"
-          onClick={() => act(async () => 'Assigned:\n' + JSON.stringify(await api('/admin/assign', { method: 'POST', admin: tok }), null, 1))}>
+          onClick={() => act(async () => 'Assigned:\n' + (await api('/admin/assign', { method: 'POST', admin: tok })).summary.join('\n'))}>
           {busy ? 'Working…' : 'Assign arms (pairs + coin flip)'}
         </button>
       </div>

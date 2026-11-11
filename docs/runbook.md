@@ -1,5 +1,18 @@
 # Session runbook
 
+## Round 2 session (11 Nov): checklist
+1. Deploy the v2 commit. Check that `/api/health` shows `"llm": true`. Open the site 5 minutes early.
+2. **Only add learners once they are seated.** If you add someone who doesn't come, **delete** them; that is possible only while they haven't started.
+3. Read the rules aloud: "Only this tab for all three parts. Phones away. No ChatGPT. Low pretest scores are expected."
+4. Tick everyone and press **pretest** once, so all the clocks start together.
+5. When everyone has finished, or the clock has passed 15 minutes plus 2, press **Assign**. It takes only learners who have finished, and lists anyone it skipped.
+6. Tick the assigned learners and press **practice** once.
+7. **Don't use force moves.** If someone is late or loses their connection, note who and how many minutes.
+8. At 45 minutes, move everyone to **break**, then **Download export** at once.
+9. Learner from 10 Nov whose session was cut short: move him from pretest straight to **practice** (no force).
+10. Confirm 13 Nov with everyone, at least 2 days after their practice.
+
+
 ## Before 11 Nov
 - [ ] The GitHub repo is **private**: it contains the held-out answers.
 - [ ] The Supabase project is not paused. Open its dashboard once.

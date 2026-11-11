@@ -12,8 +12,10 @@ import re
 import time
 
 from .config import settings
-from .grader import compare, describe
-from .sandbox import InfraError, run_many
+from collections import Counter
+
+from .grader import compare, describe, norm_rows
+from .sandbox import InfraError, SandboxError, run_many, run_query
 
 SCHEMA_TEXT = """Tables (schema shop):
 customers(customer_id PK, name, city, signup_date)
@@ -33,14 +35,15 @@ SCHEMA_NOTES = [
 ]
 
 LEVEL_INSTRUCTIONS = {
-    1: ("LEVEL 1 — SYMPTOM. One or two sentences, at most 40 words, ideally ending with a question.\n"
-        "If there is an attempt: point at WHAT IS WRONG IN THEIR RESULT or approach, in everyday words, so they "
-        "can find the cause themselves (e.g. 'Some customers are missing from your result. Which ones, and what do "
-        "they have in common?').\n"
-        "If there is no attempt: ask about what the question needs (e.g. 'Which two pieces of information do you "
-        "need to compare, and are they in the same table?').\n"
-        "FORBIDDEN: naming the SQL feature that fixes it (LEFT JOIN, NOT EXISTS, DISTINCT, COALESCE, GROUP BY, "
-        "subqueries...), table or column names in snake_case, steps of the solution, lists, any SQL."),
+    1: ("LEVEL 1 — LOCATE. One or two sentences, at most 45 words, ending with a question.\n"
+        "If there is an attempt: point at the EXACT part of their query or result that is wrong, so they can find "
+        "the cause themselves. Be concrete: quote their own clause or name (e.g. 'Your JOIN ... ON p.product_id = "
+        "p.product_id compares a column with itself. What should it be compared with?'), or use the example rows "
+        "below (e.g. 'Customer 17 is missing from your result. What do they have that the others don't?'). "
+        "Say WHERE the problem is, not how to fix it. You may name tables and columns from the schema.\n"
+        "If there is no attempt: ask which pieces of information the question needs and which tables hold them.\n"
+        "FORBIDDEN: naming any SQL feature or keyword the student has NOT used themselves (see 'Features the "
+        "student has used'), steps of the solution, lists, any SQL they haven't written."),
     2: ("LEVEL 2 — CONCEPT. At most 3 short sentences, 70 words, one paragraph.\n"
         "Name the ONE SQL idea or feature they need next and explain in plain words WHY it solves the problem "
         "(e.g. 'An inner join keeps only rows that match on both sides; a left join keeps every row of the first "
@@ -64,29 +67,52 @@ LEVEL_INSTRUCTIONS = {
 # Deterministic shape check on every TUTOR reply (in addition to the leak guard): a reply that breaks
 # the limits for its level is retried once with the reason, then replaced by the deterministic hint.
 LEVEL_LIMITS = {
-    1: dict(chars=280, code=0, fence=False, names=False),
+    1: dict(chars=320, code=2, fence=False, names=True),    # quoted code only from their own query (or the question)
     2: dict(chars=450, code=2, fence=False, names=True),
     3: dict(chars=320, code=2, fence=False, names=True),   # the LLM's sentence only; the skeleton is added by code
     4: dict(chars=650, code=6, fence=True, names=True),
-    "error": dict(chars=900, code=6, fence=True, names=True),
+    "error": dict(chars=650, code=6, fence=True, names=True),     # small blocks; vocabulary checked below
 }
-# SQL features an L1 hint must not name. Word-boundary patterns that look like SQL, so ordinary
-# English ("not included", "behaving", "two distinct facts", "except for") is not rejected.
-L1_FORBIDDEN = [
-    (r"\b(left|right|full|inner|outer|cross)\s+(outer\s+)?join\b", "left/inner join"),
-    (r"\bnot\s+exists\b|\bexists\s*\(", "exists"),
-    (r"\banti[\s-]?join\b", "anti-join"),
-    (r"\bcoalesce\b", "coalesce"),
-    (r"\bselect\s+distinct\b|\bdistinct\s*\(|`[^`]*\bdistinct\b[^`]*`|\bDISTINCT\b", "distinct"),
-    (r"\bgroup\s+by\b", "group by"),
-    (r"\bHAVING\b|`[^`]*\bhaving\b[^`]*`|\bhaving\s+(count|sum|max|min|avg)\b|\ba\s+having\s+(clause|filter)\b", "having"),
-    (r"\bextract\s*\(", "extract"),
-    (r"\bsub-?quer(y|ies)\b|\bctes?\b|\bcommon table expression", "subquery"),
-    (r"\bnot\s+in\s*\(|\bNOT\s+IN\b", "not in"),
-    (r"\bis\s+(not\s+)?null\b", "is null"),
-    (r"\bEXCEPT\b|\bUNION\b|`[^`]*\b(except|union)\b[^`]*`", "except/union"),
-]
-_L1_RX = [(re.compile(rx), name) for rx, name in L1_FORBIDDEN]
+# SQL features a hint may not INTRODUCE (L1 and error hints): each is allowed only if the learner's own query,
+# or the error message, already uses it. Word-boundary patterns that look like SQL, so ordinary English
+# ("not included", "behaving", "two distinct facts", "except for") is not caught.
+#   name -> (pattern in the hint, pattern in the learner's SQL / error message)
+CONSTRUCTS = {
+    "left join": (r"\b(left|right|full)[\s-]+(outer[\s-]+)?join\b|\bouter[\s-]+join\b", r"\b(left|right|full)\s+(outer\s+)?join\b"),
+    # a comma list in FROM is a (cross) join too, so "cross join" may be said about it
+    "inner join": (r"\b(inner|cross)[\s-]+join\b", r"\bjoin\b|\bfrom\s+[\w.]+(\s+(as\s+)?\w+)?\s*,\s*[\w.]+"),
+    "exists": (r"\bnot\s+exists\b|\bexists\s*\(", r"\bexists\b"),
+    "anti-join": (r"\banti[\s-]?join\b", r"\bexists\b|\bnot\s+in\b|\bis\s+null\b"),
+    "coalesce": (r"\bcoalesce\b", r"\bcoalesce\b"),
+    "distinct": (r"\bselect\s+distinct\b|\bdistinct\s*\(|`[^`]*\bdistinct\b[^`]*`|\bDISTINCT\b", r"\bdistinct\b"),
+    "group by": (r"\bgroup\s+by\b", r"\bgroup\s+by\b"),
+    "having": (r"\bHAVING\b|`[^`]*\bhaving\b[^`]*`|\bhaving\s+(count|sum|max|min|avg)\b|\ba\s+having\s+(clause|filter)\b"
+               r"|\b(using|use|with|add|in|into|a)\s+having\b(?!\s+(no|any|a|an|the|more|less|only|been)\b)|\bhaving\s*[?.,]",
+               r"\bhaving\b"),
+    "extract": (r"\bextract\s*\(|\bdate_part\b|\bdate_trunc\b", r"\bextract\b|\bdate_part\b|\bdate_trunc\b"),
+    "subquery": (r"\bsub-?quer(y|ies)\b|\binner\s+quer(y|ies)\b|\bnested\s+(query|select)\b|\bctes?\b|\bcommon table expression|\(\s*select\b",
+                 r"\(\s*select\b|^\s*with\b"),
+    "not in": (r"\bnot\s+in\s*\(|\bNOT\s+IN\b", r"\bnot\s+in\b"),
+    # only as SQL (uppercase or in backticks): "a row where o.status is null" is plain English
+    "is null": (r"\bIS\s+(NOT\s+)?NULL\b|`[^`]*\bis\s+(not\s+)?null\b[^`]*`", r"\bis\s+(not\s+)?null\b"),
+    "except/union": (r"\bEXCEPT\b|\bUNION\b|`[^`]*\b(except|union)\b[^`]*`", r"\bexcept\b|\bunion\b"),
+    "count distinct": (r"\bcount\s*\(\s*distinct\b", r"\bcount\s*\(\s*distinct\b"),
+}
+_CONSTRUCT_RX = {k: (re.compile(h), re.compile(u, re.I | re.M)) for k, (h, u) in CONSTRUCTS.items()}
+
+
+def features_used(*texts):
+    """SQL features present in the learner's own query (and the error message, if any)."""
+    t = "\n".join(x for x in texts if x)
+    return {k for k, (_, used) in _CONSTRUCT_RX.items() if used.search(t)}
+
+
+def new_features(hint, allowed):
+    """Features the hint names that are not in `allowed`."""
+    low = hint.lower()   # lower-case patterns run on the lowered text, the UPPERCASE-only ones on the original
+    return [k for k, (rx, _) in _CONSTRUCT_RX.items() if k not in allowed and (rx.search(low) or rx.search(hint))]
+
+
 _LIST_OR_HEADING = re.compile(r"(?m)^\s*(?:[-*•]\s|\d+[.)]\s|#{1,6}\s|\*\*[^*]+\*\*\s*:?\s*$)")
 _SCHEMA_NAMES = None
 
@@ -101,36 +127,76 @@ def _schema_names():
     return _SCHEMA_NAMES
 
 
-def shape_problem(text, level, mode="normal"):
-    """Return None if the reply fits its level, else a short reason (fed back to the LLM on retry)."""
+def shape_problem(text, level, mode="normal", attempt=None, question=None):
+    """Return None if the reply fits its level, else a short reason (fed back to the LLM on retry).
+    `attempt` (the learner's latest run) and `question` set what the hint may mention: anything already in
+    the learner's own query or the error message, nothing new (at L1 and in error hints)."""
     lim = LEVEL_LIMITS["error" if mode == "error" else level]
+    own_sql = (attempt or {}).get("sql_text") or ""
+    err = (attempt or {}).get("error") or ""
     if len(text) > lim["chars"]:
         return f"too long ({len(text)} characters; the limit is {lim['chars']})"
-    if level in (1, 2) and mode != "error" and _LIST_OR_HEADING.search(text):
+    if (level in (1, 2) or mode == "error") and _LIST_OR_HEADING.search(text):
         return "uses a list or headings; write one short paragraph"
     if not lim["fence"] and "```" in text:
-        return "contains a code block; no SQL at this level"
-    if len(re.findall(r"`[^`\n]+`", text)) > lim["code"]:
+        return "contains a code block; no code block at this level"
+    if len(re.findall(r"`[^`\n]+`", _SQL_SPAN.sub(" ", text))) > lim["code"]:
         return "contains too many code fragments"
+    if level == 1 or mode == "error":
+        new = new_features(text, features_used(own_sql, err))
+        if new:
+            return (f"names a SQL feature the student hasn't used ({new[0]}); "
+                    + ("explain only the error, using their own SQL" if mode == "error"
+                       else "point at where the problem is, not at the fix"))
     if level == 1 and mode != "error":
-        low = text.lower()   # lower-case patterns run on the lowered text, the UPPERCASE-only ones on the original
-        hit = [name for rx, name in _L1_RX if rx.search(low) or rx.search(text)]
-        if hit:
-            return f"names the SQL feature that fixes it ({hit[0]}); describe the symptom instead"
-    if not lim["names"]:
-        low = text.lower()
-        hit = [n for n in _schema_names() if re.search(rf"\b{re.escape(n)}\b", low)]
-        if hit:
-            return f"names tables or columns ({', '.join(sorted(hit)[:3])}); name the idea only"
+        source = own_sql if own_sql else (question or {}).get("prompt", "")
+        if not own_sql:   # before any attempt, naming the tables to use would be the plan itself
+            hit = [n for n in _schema_names() if re.search(rf"\b{re.escape(n)}\b", text.lower())
+                   and not re.search(rf"\b{re.escape(n)}\b", source.lower())]
+            if hit:
+                return f"names tables or columns ({', '.join(sorted(hit)[:3])}) before any attempt; ask about the information needed"
+        for span in re.findall(r"`([^`\n]+)`", text):     # quoted code must come from their own query
+            if not _from_own(span, source):
+                return (f"quotes code the student didn't write (`{span[:40]}`); quote only their own query"
+                        if own_sql else f"quotes code (`{span[:40]}`); there is no attempt yet, so ask about the information needed")
+    if mode == "error":
+        blocks = [b.strip() for b in _SQL_SPAN.findall(text)]
+        if len(blocks) > 2 or any(len(b) > 160 or b.count("\n") > 1 for b in blocks):
+            return "the code is too long; show only the corrected fragment the error is about (one or two lines)"
+        for b in blocks + [m for m in re.findall(r"`([^`\n]+)`", _SQL_SPAN.sub(" ", text))]:
+            joins = len(re.findall(r"(?i)\bjoin\b", b))
+            if joins >= 2 or (joins and re.search(r"(?i)\bfrom\b", b)):
+                return "rewrites the joins; show only the fragment the error is about"
+            if re.search(r"(?i)\bselect\b", b) and _new_tokens(b, own_sql):
+                return "rewrites part of the query; show only the fragment the error is about, in their own SQL"
+        for span in re.findall(r"`([^`\n]+)`", _SQL_SPAN.sub(" ", text)):
+            if len(span) > 70:
+                return "a code fragment is too long; show only the part the error is about"
     return None
 
 
-ERROR_INSTRUCTION = ("ERROR hint. The learner's latest attempt failed with the SQL error shown. In at most 4 short "
-                     "sentences, explain in plain words what the error means, which part of their query causes it, and "
-                     "how to fix THAT part only. You may show one small fragment (the fixed part, not the whole query). "
-                     "NEVER write their corrected query in full, and do not fix or mention any other problem in it "
-                     "(joins, grouping, filters, missing tables): the rest of the question is theirs to solve. "
-                     "Under 600 characters.")
+def _new_tokens(span, own_sql):
+    return set(_TOKEN.findall(span.lower())) - set(_TOKEN.findall(own_sql.lower()))
+
+
+def _from_own(span, own_sql):
+    """True if (almost) every token of `span` occurs in the learner's own SQL. Short spans (a keyword or
+    two) must match exactly, so a single new keyword like `EXISTS` can't slip through."""
+    toks = set(_TOKEN.findall(span.lower()))
+    if not toks:
+        return True
+    new = len(_new_tokens(span, own_sql))
+    return new <= (0 if len(toks) <= 3 else max(1, len(toks) // 5))   # a renamed alias / corrected spelling
+
+
+ERROR_INSTRUCTION = ("ERROR hint. The learner's latest attempt failed with the SQL error shown. In at most 3 short "
+                     "sentences (under 450 characters): say what the error message means in plain words, and exactly "
+                     "where in THEIR query it comes from (quote their fragment in backticks). You may show the "
+                     "corrected spelling of a name, or the one missing comma or keyword (one or two lines at most), but "
+                     "only using SQL they have already written.\n"
+                     "FORBIDDEN: any SQL keyword or feature the student has not used themselves (unless "
+                     "the error message itself names it); rewriting their query; mentioning ANY other problem in it "
+                     "(joins, grouping, filters, missing tables). Fixing the error is theirs; solving the question is theirs.")
 
 
 TUTOR_SYSTEM = """You are a SQL tutor helping a student learn multi-table SQL on PostgreSQL.
@@ -138,6 +204,7 @@ Your goal is that the student can solve such questions alone later, so you give 
 NEVER write a complete working query that answers the question. Be brief, friendly and concrete.
 The reference solution is given for YOUR understanding only; never copy or paraphrase it into SQL.
 Always talk about the learner's OWN latest attempt when there is one: what is right, what is wrong.
+Never introduce a SQL feature the student hasn't used, unless your level says you may (level 2 and above).
 Use plain text. You may use **bold** and `inline code` sparingly. No headings."""
 
 BASELINE_SYSTEM = """You are a helpful SQL assistant for PostgreSQL.
@@ -276,11 +343,11 @@ def skeleton(question):
     return re.sub(r"[ \t]+", " ", s).strip()
 
 
-def tutor_prompt(question, level, last_attempt, mode="normal"):
+def tutor_prompt(question, level, last_attempt, mode="normal", examples=None):
     task = ERROR_INSTRUCTION if mode == "error" else LEVEL_INSTRUCTIONS[level]
     if level == 3 and mode != "error":
         task += "\n\nSkeleton:\n```sql\n" + skeleton(question) + "\n```"
-    return _context(question, last_attempt) + f"\n\nTASK: {task}"
+    return _context(question, last_attempt, examples) + f"\n\nTASK: {task}"
 
 
 def finish_hint(text, question, level, mode="normal"):
@@ -290,14 +357,55 @@ def finish_hint(text, question, level, mode="normal"):
     return text
 
 
-def _context(question, last_attempt):
+def _context(question, last_attempt, examples=None):
     att = "The student has not run any attempt yet."
+    used = "none (no attempt yet)"
     if last_attempt:
         d = last_attempt.get("diff") or {}
         fb = last_attempt.get("error") or (describe(d) if d.get("reason") else "Correct: this attempt already returns the right result.")
         att = f"Student's latest attempt:\n```sql\n{last_attempt['sql_text']}\n```\nResult: {fb}"
+        if examples:
+            att += "\n" + examples
+        used = ", ".join(sorted(features_used(last_attempt["sql_text"]))) or "only basic SELECT / FROM / WHERE"
     return (f"{SCHEMA_TEXT}\n\nQuestion:\n{question['prompt']}\n\n"
-            f"Reference solution (for your understanding only):\n```sql\n{question['sql']}\n```\n\n{att}")
+            f"Reference solution (for your understanding only):\n```sql\n{question['sql']}\n```\n\n{att}\n\n"
+            f"Features the student has used: {used}")
+
+
+def result_examples(question, last_attempt, k=3):
+    """Concrete rows for the tutor: some expected rows the attempt is missing, some rows it has that it
+    shouldn't, and a duplicated row. Re-runs the learner's (read-only) query; '' if that isn't possible."""
+    if not last_attempt or last_attempt.get("error") or last_attempt.get("correct"):
+        return ""
+    d = last_attempt.get("diff") or {}
+    if d.get("reason") not in ("rows", "column_count"):
+        return ""
+    try:
+        res = run_query(last_attempt["sql_text"])
+    except Exception:          # SandboxError, InfraError, anything: the hint works without examples
+        return ""
+    got = Counter(norm_rows(res["rows"]))
+    exp = Counter(tuple(r) for r in question["expected_rows"])
+    def show(v):
+        if v is None:
+            return "NULL"
+        t = str(v)[:40]
+        return t[:-3] if re.fullmatch(r"-?\d+\.00", t) else t     # 17.00 -> 17 (ids, counts)
+    fmt = lambda rows: "; ".join("(" + ", ".join(show(v) for v in r) + ")" for r in rows)
+    out = []
+    if d.get("reason") == "rows":
+        miss = list((exp - got).elements())[:k]
+        extra = list((got - exp).elements())[:k]
+        dup = [r for r, c in got.items() if c > 1][:1]
+        if miss:
+            out.append(f"Example rows the student's result is MISSING: {fmt(miss)}")
+        if extra:
+            out.append(f"Example rows in the student's result that should NOT be there: {fmt(extra)}")
+        if dup:
+            out.append(f"A row that appears {got[dup[0]]} times in the student's result: {fmt(dup)}")
+    else:
+        out.append(f"First rows of the student's result: {fmt(norm_rows(res['rows'][:k]))}")
+    return "\n".join(out)
 
 
 def _model_kwargs(model):
@@ -380,7 +488,8 @@ _ERROR_EXPLAIN = [
      "a missing FROM, a keyword in the wrong place, a reserved word such as order used as a name, or `is not` used "
      "for a comparison (use `<>` or `!=`)."),
     (r'aggregate functions are not allowed in WHERE',
-     "WHERE is checked row by row, before any grouping, so it can't use COUNT or SUM. Conditions on aggregates go in HAVING."),
+     "WHERE is checked row by row, before any grouping happens, so it can't use COUNT or SUM. "
+     "Where in a query can a condition look at the finished groups instead of single rows?"),
     (r'operator does not exist',
      "The two sides of a comparison have different types (for example a number compared with text). Check the quotes and the columns being compared."),
 ]
@@ -400,6 +509,9 @@ def deterministic_hint(question, level, last_attempt, mode="normal"):
     """Fallback used when the LLM is unavailable or its reply was blocked. Same ladder."""
     if mode == "error" and last_attempt and last_attempt.get("error"):
         return f"Your query stopped with this error:\n\n{last_attempt['error']}\n\n" + explain_error(last_attempt["error"])
+    if level == 1 and last_attempt and (last_attempt.get("diff") or {}).get("reason"):
+        # say concretely what is wrong with THEIR result, then the skill's symptom question
+        return describe(last_attempt["diff"]) + " " + FALLBACK[question["skill"]][1]
     if level <= 2:
         return FALLBACK[question["skill"]][level]
     if level == 3:
@@ -420,8 +532,8 @@ def tutor_hint(question, level, last_attempt, mode="normal"):
     if not settings.groq_api_key:
         return dict(text=fallback, source="fallback", guard_blocked=0, model=None, rejects=[],
                     latency_ms=int((time.perf_counter() - t0) * 1000))
-    user = tutor_prompt(question, level, last_attempt, mode)
     deadline = time.monotonic() + HELP_BUDGET_S
+    user = tutor_prompt(question, level, last_attempt, mode, result_examples(question, last_attempt))
     why = ""
     for attempt, src in ((0, "llm"), (1, "llm_retry")):
         try:
@@ -435,7 +547,7 @@ def tutor_hint(question, level, last_attempt, mode="normal"):
         if leaks_answer(finish_hint(text, question, level, mode), question):
             why = "it contained a full working query, or filled in the blanks; never give the complete query"
         else:
-            why = shape_problem(text, level, mode)
+            why = shape_problem(text, level, mode, last_attempt, question)
             if why is None:
                 return dict(text=finish_hint(text, question, level, mode), source=src, guard_blocked=blocked, model=used,
                             rejects=rejects, latency_ms=int((time.perf_counter() - t0) * 1000))

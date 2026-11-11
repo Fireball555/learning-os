@@ -1,63 +1,116 @@
 ====================================================================================================
-#1 Blank page, no idea where to start
-   question T1, level 1, closeness of attempt: none
-   model: openai/gpt-oss-120b | 91 chars | verdict: OK
+#1 ERROR, alias in WHERE. Must NOT suggest HAVING (Praneeth T3 leak)
+   T3 level E | closeness: error | grader: column "ocount" does not exist
+   FINAL: llm | model openai/gpt-oss-120b | 3506 ms | 280 chars
 ----------------------------------------------------------------------------------------------------
-Use a **distinct** (or equivalent) to ensure each product appears only once after the join.
+The error means you’re trying to filter on a column alias that hasn’t been created yet. The alias `ocount` is defined in the `SELECT` list, but you use it in the `WHERE` clause (`where ocount=0`). Since `WHERE` is evaluated before the `SELECT` list, that name doesn’t exist there.
 ====================================================================================================
-#2 Close: DISTINCT written like a function (1 column instead of 2)
-   question T1, level 4, closeness of attempt: close
-   grader: {'expected_rows': 19, 'got_rows': 19, 'expected_cols': 2, 'got_cols': 1, 'reason': 'column_count'}
-   model: openai/gpt-oss-120b | 207 chars | verdict: OK
+#2 ERROR, missing JOIN keyword. Fix only that, no rewrite (Praneeth T7)
+   T7 level E | closeness: error | grader: syntax error at or near "order_items"
+   FINAL: llm | model openai/gpt-oss-120b | 740 ms | 309 chars
 ----------------------------------------------------------------------------------------------------
-The **SELECT clause** is wrong: `distinct(p.name, p.price)` is not valid syntax – `DISTINCT` applies to the whole row, not to a parenthesized list.  
-Change it to:
+The error means the parser didn’t recognize the table name because the `JOIN` keyword is missing. It occurs right after the first join:
 
 ```sql
-SELECT DISTINCT p.name, p.price
+... LEFT JOIN orders o ON c.customer_id = o.customer_id order_items ot on o.order_id = ot.order_id
 ```
-====================================================================================================
-#3 Inner join drops customers with no orders (LEFT JOIN skill)
-   question T2, level 2, closeness of attempt: close_rows
-   grader: {'expected_rows': 44, 'got_rows': 38, 'expected_cols': 3, 'got_cols': 3, 'missing_rows': 6, 'extra_rows': 0, 'has_duplicates': False, 'reason': 'rows'}
-   model: openai/gpt-oss-120b | 214 chars | verdict: OK
-----------------------------------------------------------------------------------------------------
-Use a **LEFT JOIN** instead of the inner join so that every customer row is kept even when no matching order exists; then count the order IDs (or a column from the orders side) to get zero for those without orders.
-====================================================================================================
-#4 Fan-out: joins payments and items together, counts and sums double
-   question T4, level 3, closeness of attempt: far
-   grader: {'expected_rows': 58, 'got_rows': 109, 'expected_cols': 3, 'got_cols': 3, 'missing_rows': 58, 'extra_rows': 109, 'has_duplicates': False, 'reason': 'rows'}
-   model: openai/gpt-oss-120b | 365 chars | verdict: OK
-----------------------------------------------------------------------------------------------------
-```sql
-SELECT o.order_id,
-       ___(p.payment_id)               -- count the payments per order
-FROM   shop.orders      o
-JOIN   shop.payments    p  ON ___   -- join only on matching order_id
-JOIN   shop.order_items oi ON ___   -- join only on matching order_id
-GROUP BY o.order_id
-HAVING ___ > 1                       -- keep orders with more than one payment
-```
-====================================================================================================
-#5 Anti-join done as '<>' (wrong logic, far)
-   question T8, level 1, closeness of attempt: far
-   grader: {'expected_rows': 13, 'got_rows': 38, 'expected_cols': 2, 'got_cols': 2, 'missing_rows': 6, 'extra_rows': 31, 'has_duplicates': False, 'reason': 'rows'}
-   model: openai/gpt-oss-120b | 130 chars | verdict: OK
-----------------------------------------------------------------------------------------------------
-Use an anti‑join (or NOT EXISTS) to exclude customers who have any matching row, rather than filtering with “<>” on an inner join.
-====================================================================================================
-#6 SQL error: misspelt column
-   question T5, level E, closeness of attempt: error
-   grader: column "order_dat" does not exist (hint: Perhaps you meant to reference the column "orders.order_date".)
-   model: openai/gpt-oss-120b | 563 chars | verdict: OK
-----------------------------------------------------------------------------------------------------
-The error is telling you that the column name you wrote – **`order_dat`** – isn’t found in any of the tables you’re querying. PostgreSQL looks for a column with that exact name, can’t find it, and therefore raises the “column does not exist” message.
 
-In your `SELECT` you have:
+Add the missing `LEFT JOIN` (or `JOIN`) before `order_items`.
+====================================================================================================
+#3 ERROR, SUM(SELECT ...). Explain the error, don't hand over the subquery (Ashish T2)
+   T2 level E | closeness: error | grader: syntax error at or near "SELECT"
+   FINAL: llm | model openai/gpt-oss-120b | 707 ms | 354 chars
+----------------------------------------------------------------------------------------------------
+The error means PostgreSQL expected an expression after `SUM(` but found a whole sub‑query, which isn’t allowed there. It comes from the fragment  
 
 ```sql
-extract(month from order_dat)
-```
+SUM(SELECT 1 FROM orders o WHERE o.customer_id = c.customer_id)
+```  
 
-but the column that stores the date in the **orders** table is called **`order_date`**. Just change the reference to the correct column name (you can qualify it if you like, e.g. `orders.order_date`). That small fix will eliminate the error.
+A sub‑query must be written as a scalar expression (e.g., wrapped in parentheses) before you can apply an aggregate like `SUM`.
+====================================================================================================
+#4 ERROR, aggregate in WHERE (Praneeth T3)
+   T3 level E | closeness: error | grader: aggregate functions are not allowed in WHERE
+   REJECTED (openai/gpt-oss-120b): names a SQL feature the student hasn't used (having); explain only the error, using their own SQL
+      'The error means you tried to use an aggregate function (`COUNT`) in a `WHERE` clause, but aggregates are only allowed in a `HAVING` clause (or a `SELECT`). It comes from the fragment ```count(o.product_id) is null``` in your query.'
+   FINAL: llm_retry | model openai/gpt-oss-120b | 6272 ms | 255 chars
+----------------------------------------------------------------------------------------------------
+The error means you tried to use an aggregate function (`COUNT`) in a `WHERE` clause, which isn’t allowed because `WHERE` works on rows before any aggregation is done. It comes from the part of your query:
+
+```sql
+... where count(o.product_id) is null
+```
+====================================================================================================
+#5 L1, must LOCATE: sums payments instead of items (Ashish T4; v1 rejected the good answer)
+   T4 level 1 | closeness: far | grader: {'expected_rows': 58, 'got_rows': 58, 'expected_cols': 3, 'got_cols': 3, 'missing_rows': 58, 'extra_rows': 58, 'has_duplicates': False, 'reason': 'rows'}
+   FINAL: llm | model openai/gpt-oss-120b | 3241 ms | 199 chars
+----------------------------------------------------------------------------------------------------
+Your subquery for the third column sums **payments.amount**, but the question asks for the items total ( quantity × unit_price from order_items ). Which part of the query is pulling the wrong values?
+====================================================================================================
+#6 L1, must LOCATE: joins a column to itself (Ashish T3)
+   T3 level 1 | closeness: far | grader: {'expected_rows': 4, 'got_rows': 26, 'expected_cols': 2, 'got_cols': 2, 'missing_rows': 0, 'extra_rows': 22, 'has_duplicates': False, 'reason': 'rows'}
+   REJECTED (openai/gpt-oss-120b): contains too many code fragments
+      'Your `JOIN` clause uses `ON p.product_id = p.product_id`, which compares the same column to itself instead of linking\u202f`products`\u202fto\u202f`order_items`. Which column from\u202f`order_items`\u202fshould be used in that comparison?'
+   REJECTED (openai/gpt-oss-120b): contains too many code fragments
+      'Your `JOIN` condition `ON p.product_id = p.product_id` compares the same column to itself, so every product matches every row in\u202f`order_items`. Which column should you be joining on instead?'
+   FINAL: fallback | model None | 5508 ms | 231 chars
+----------------------------------------------------------------------------------------------------
+Expected 4 row(s), you returned 26. 22 row(s) that shouldn't be there. The question is about things that NEVER happened. Can a row that exists show you that something is absent? Check whether your result contains rows it shouldn't.
+====================================================================================================
+#7 L1, comma cross join. Point at the missing link, no LEFT JOIN (Samyuktha T2)
+   T2 level 1 | closeness: far | grader: {'expected_rows': 44, 'got_rows': 44, 'expected_cols': 3, 'got_cols': 3, 'missing_rows': 44, 'extra_rows': 44, 'has_duplicates': False, 'reason': 'rows'}
+   FINAL: llm | model openai/gpt-oss-120b | 3361 ms | 248 chars
+----------------------------------------------------------------------------------------------------
+Your query lists `customers c, orders o` without any condition linking the two tables, so it creates a Cartesian product before grouping. That produces the inflated counts you see. Which part of the query should relate the customer to their orders?
+====================================================================================================
+#8 L1, fan-out: payments x items (Gowtham T4)
+   T4 level 1 | closeness: far | grader: {'expected_rows': 58, 'got_rows': 109, 'expected_cols': 3, 'got_cols': 3, 'missing_rows': 58, 'extra_rows': 109, 'has_duplicates': False, 'reason': 'rows'}
+   FINAL: llm | model openai/gpt-oss-120b | 4103 ms | 241 chars
+----------------------------------------------------------------------------------------------------
+Your `SUM(a.quantity*a.unit_price)` is being calculated after joining each order’s items to **every** payment for that order, so the item amounts are multiplied by the number of payments. Which part of the query causes those duplicated rows?
+====================================================================================================
+#9 L1, no attempt yet (blank page, T5). A question, no plan
+   T5 level 1 | closeness: none
+   FINAL: llm | model openai/gpt-oss-120b | 751 ms | 176 chars
+----------------------------------------------------------------------------------------------------
+Which columns give you the order date and the quantity × unit_price, and from which tables can you retrieve those values to calculate monthly revenue for delivered 2025 orders?
+====================================================================================================
+#10 L2, concept after a comma join (Praneeth T1)
+   T1 level 2 | closeness: far | grader: {'expected_rows': 19, 'got_rows': 26, 'expected_cols': 2, 'got_cols': 2, 'missing_rows': 0, 'extra_rows': 7, 'has_duplicates': False, 'reason': 'rows'}
+   REJECTED (openai/gpt-oss-120b): too long (472 characters; the limit is 450)
+      'You need to add a **join condition** that ties each order‑item row to the product it refers to; without it the query creates a Cartesian product, pairing every product with every order‑item and inflating the result set. By specifying that the `product_id` columns must match, only the rows where a product was actually purchased are considered, so the price comparison applies correctly. Which column'
+   FINAL: llm_retry | model openai/gpt-oss-120b | 4125 ms | 428 chars
+----------------------------------------------------------------------------------------------------
+You need an **explicit join condition** that ties each order‑item row to the product it refers to (product_id); without it the query creates a Cartesian product, pairing every product with every order‑item and inflating the result set. Adding the condition ensures you only compare prices for the same product that actually appears in an order. Which column(s) would you match to restrict the rows to those that belong together?
+====================================================================================================
+#11 L3, skeleton sentence (Samyuktha-style T8, '<>' logic)
+   T8 level 3 | closeness: far | grader: {'expected_rows': 13, 'got_rows': 38, 'expected_cols': 2, 'got_cols': 2, 'missing_rows': 6, 'extra_rows': 31, 'has_duplicates': False, 'reason': 'rows'}
+   FINAL: llm | model openai/gpt-oss-120b | 5277 ms | 434 chars
+----------------------------------------------------------------------------------------------------
+Your query filters rows with a single join chain, while the skeleton uses a `WHERE … EXISTS` subquery that builds the same join sequence inside the subquery instead of joining everything in the outer query.
+
+```sql
+SELECT c.customer_id, c.name
+FROM shop.customers c
+WHERE ___ EXISTS (
+ SELECT 1 FROM shop.orders o
+ ___ JOIN shop.order_items oi ON ___
+___ JOIN shop.products p ON ___
+___ JOIN shop.categories cat ON ___
+WHERE ___ )
+```
+====================================================================================================
+#12 L4, exact fix: right rows, wrong order (Gowtham T7)
+   T7 level 4 | closeness: close | grader: {'expected_rows': 44, 'got_rows': 44, 'expected_cols': 3, 'got_cols': 3, 'reason': 'order'}
+   FINAL: llm | model openai/gpt-oss-120b | 1041 ms | 321 chars
+----------------------------------------------------------------------------------------------------
+- **GROUP BY clause** – you only grouped by `c.customer_id`; you also need `c.name` because it’s selected.  
+  ```sql
+  GROUP BY c.customer_id, c.name
+  ```
+
+- **ORDER BY clause** – the query orders only by the total; the spec requires a tie‑breaker on `customer_id`.  
+  ```sql
+  ORDER BY total DESC, c.customer_id
+  ```
 ====================================================================================================

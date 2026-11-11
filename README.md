@@ -5,7 +5,7 @@
 When a learner pastes a question into a chatbot, they get the full query in four seconds, and six weeks later they can't start one alone. This project tests the alternative. An adaptive SQL tutor caps how much it reveals, based on what each learner has already shown they can do unaided. Then a **removal test** checks what they can do with the assistant gone, compared against learners who used an ordinary answer-giving assistant.
 
 > 100xEngineers C7 Capstone · Module 3 · Learning OS brief
-> Status: the study runs 10 Nov (pretest + practice) and 13 Nov (removal test). Results go in `results/` and the case study.
+> Status: round 1 ran on 10 Nov (tutor v1), round 2 on 11 Nov (tutor v2), and the removal test is on 13 Nov. Results go in `results/` and the case study.
 
 ---
 
@@ -55,6 +55,8 @@ flowchart LR
 - **L3 skeleton:** one sentence plus the solution's shape with `___` blanks (made by code, never runs).
 - **L4 fix:** the exact change to the learner's own attempt, as a fragment.
 
+**Tutor v2 (from 11 Nov, after round 1):** a hint may use anything already in the learner's own query or the error message, and may never introduce a new SQL feature or new code before L2. Get help unlocks again only after a new run. See [`docs/llm-analysis-round1.md`](docs/llm-analysis-round1.md).
+
 **How the ladder moves (policy v3):** every hint is about the learner's own latest query. The rules look at how close it is, as measured by the grader:
 - SQL error: explain the error. This doesn't use up a rung.
 - Close (right rows, only the columns or order wrong): straight to L4. A `SELECT *` on the wrong rows is not close.
@@ -77,12 +79,13 @@ backend/app/
   question_bank.py   22 questions (6 pretest / 8 practice / 8 held-out), the single source of truth
   questions.json     frozen expected result sets (scripts/build_questions.py)
   grader.py  sandbox.py  policy.py  assistant.py  db.py  config.py
-backend/tests/       66 tests: grader, policy, sandbox security, 30 trap/alternative queries,
+backend/tests/       71 tests: grader, policy, sandbox security, 30 trap/alternative queries,
                      full study flow, races, outages, timer, leak guard
 frontend/            React + Vite + Tailwind + CodeMirror (dist/ is committed and served by FastAPI)
 db/                  schema, deterministic seed generator, app tables + read-only role
 scripts/             reset_db.sh, build_questions.py, analyze.py
-docs/                preregistration.md, runbook.md, hypothesis-log.md, viva-notes.md
+docs/                preregistration.md, runbook.md, hypothesis-log.md, viva-notes.md,
+                     llm-analysis-round1.md, evidence-checklist.md
 ```
 
 ## Run it

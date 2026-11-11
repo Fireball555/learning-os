@@ -26,5 +26,23 @@ For learners who already know single-table SQL, an assistant that caps how much 
 - **Open question:** she wrote `LEFT JOIN … IS NULL` (T3) and `NOT IN (subquery)` (T8) without any hint teaching them. Did she get outside help, or did she already know them? → Tab switches are now logged in practice.
 - **Kept as is:** practice stays at 45 min, so that every learner, including her pair partner, has the same exposure.
 
+## Round 1 (10 Nov evening, tutor v1): 9 real learners
+- **Practice solved:**
+  - tutor (4): 7, 6, 4, 5 out of 8;
+  - baseline: 8 and 8 for the two who practised, one did 1 run, one never started, and one practises on 11 Nov.
+- **Baseline:** one learner copy-pasted all 8 answers in 7 minutes. This is expected for that arm and is a limitation on time-on-task.
+- **Feedback:**
+  - "The AI tutor can't locate my problem."
+  - "It gives part of the code directly."
+  - One learner liked it and said he would have finished all 8 with more time.
+  - Return item: 3–5 out of 5.
+- **Evidence (`docs/llm-analysis-round1.md`):**
+  - When the AI saw a real attempt, its diagnosis was right in 11 of 12 cases.
+  - The leaks all came through SQL-error explanations, which made up half of all help.
+  - Built-in fallbacks were the worst replies.
+  - The ladder barely ran: no L3, and only one L4.
+- **Change → tutor v2:** the rule "may use only what is in the learner's own query or the error" (Deviation 3). Round 2 (11 Nov) is the primary test.
+- **What this means for the hypothesis:** "capping how much it reveals" only works if *every* channel is capped. Error help turned out to be the main channel, not a side channel.
+
 ## After the removal test (13 Nov) → v2
 _Fill in: the result under the pre-registered rule, then v2 of the hypothesis and the specific evidence (per-learner numbers, hint logs, observations) behind every word that changed._

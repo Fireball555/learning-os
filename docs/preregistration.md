@@ -20,8 +20,8 @@ This is updated live during practice.
 
 | Outcome | Condition |
 |---|---|
-| **Supported** | Tutor mean gain − baseline mean gain ≥ 16.7 points (one item), **and** the tutor learner out-gains the baseline learner in at least two-thirds of the complete pairs (rounded up, and at least 2). With 3 pairs that is 2, with 4 it is 3, with 5 it is 4. |
-| **Falsified** | The mirror image: baseline ahead by ≥ 16.7 points **and** wins in at least two-thirds of the complete pairs. |
+| **Supported** | (round 2 is primary; see Deviation 3) Tutor mean gain − baseline mean gain ≥ one item, i.e. ≥ 100/6 = 16.67 points, **and** the tutor learner out-gains the baseline learner in at least two-thirds of the complete pairs (rounded up, and at least 2). With 3 pairs that is 2, with 4 it is 3, with 5 it is 4. |
+| **Falsified** | The mirror image: baseline ahead by ≥ one item (16.67 points) **and** wins in at least two-thirds of the complete pairs. |
 | **Inconclusive** | Anything else. Reported as "no evidence either way at n = <final n>". |
 
 **Completion collapses** if the tutor arm's mean practice questions solved is below 0.75 × the baseline arm's mean. A collapse is reported next to the retention result, whatever that result is.
@@ -109,3 +109,23 @@ Held-out items are labelled near or far transfer in `question_bank.py`. H1–H6 
      - tab switches are also logged in practice.
    - Why: in learner 1's practice, 4 of 13 tutor hints (31%) were fallbacks, all of them error explanations, which is above the 20% limit. One error hint for a timeout gave the full `JOIN … ON` structure at L1.
    - Learner 1 got the earlier version. Their partner and every later learner get this one. This is reported next to learner 1's numbers.
+3. **Tutor v2 and two rounds (decided 11 Nov, before any removal test).**
+   - **Evidence:** round 1 (10 Nov, tutor v1), analysed in `docs/llm-analysis-round1.md`.
+     - About half of all tutor help (17 of 35) was SQL-error explanations, and half of the AI-written ones solved more than the error. For example, one gave `HAVING COUNT(…) = 0` on T3.
+     - The v1 rules rejected accurate L1 diagnoses, and the fallbacks that replaced them were generic or wrong.
+     - Learner feedback said the same: "gives part of the code directly" and "can't locate my problem".
+   - **What changed (tutor arm only; the baseline is unchanged):**
+     - a hint may use anything in the learner's own query or the error message, but may not introduce a new SQL feature or new code before L2;
+     - error explanations may show at most a one- or two-line fix in the learner's own SQL;
+     - the tutor is shown example rows that are missing, extra or duplicated in the learner's result;
+     - the built-in L1 says what is wrong with the result;
+     - Get help is locked until a new run, in both arms, so there are no repeat replies;
+     - Assign now takes only learners who have finished the pretest.
+   - **Analysis:**
+     - Pairs whose tutor learner practised from 11 Nov on (`V2_FROM` in `analyze.py`) form **round 2: tutor v2 vs baseline. This is the primary pre-registered decision.**
+     - Round 1 (tutor v1) and all rounds pooled are reported separately, with the same rule.
+     - Nobody had taken the removal test when this was decided.
+4. **Session incidents, 10 Nov.**
+   - One learner joined 7 min late, and his practice clock was restarted by the invigilator, giving 45 min of actual practice.
+   - One learner (baseline, pair 4) lost his connection after the pretest. He does practice on 11 Nov and the removal test on 13 Nov.
+   - Five people created in advance did not show up. They were excluded, then deleted, never having started.

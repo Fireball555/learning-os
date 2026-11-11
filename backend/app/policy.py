@@ -47,7 +47,7 @@ class Decision:
 
 
 GATE_MSG = "Try one attempt yourself first. Run it, then ask again if it's still not right."
-REPEAT_MSG = "Try using the last hint first. Run a new attempt, and the next hint will go one step further."
+REPEAT_MSG = "Run a new attempt first. Help unlocks again after your next run."
 SOLVED_MSG = "Your latest query is already correct. Nice work. Move on to the next question."
 
 

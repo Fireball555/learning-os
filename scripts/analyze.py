@@ -6,15 +6,17 @@ excluded learners (no-show/dropout) are listed separately, never silently droppe
 
 PRIMARY (skill-matched, one item per skill on both sides):
   gain = (H1..H6 correct / 6) - (P1..P6 correct / 6), in percentage points.
-  Decision rule (docs/preregistration.md): tutor mean gain - baseline mean gain >= 16.7 pts
-  (one item) AND tutor gain > baseline gain in >= 2 of 3 pairs -> supported;
+  Decision rule (docs/preregistration.md): tutor mean gain - baseline mean gain >= one item (100/6 = 16.67 pts)
+  AND tutor gain > baseline gain in >= two-thirds of complete pairs (min 2) -> supported;
   the mirror image -> falsified; anything else -> inconclusive.
   Completion "collapses" if tutor mean practice solved < 0.75 x baseline mean.
 SECONDARY: held-out /8, far-transfer items (H7, H8), practice solved /8, practice
   questions attempted, solved-before-any-help, help requests (real ones only), max/mean
   hint level, LLM fallback share, guard blocks, median seconds per held-out question,
   tab-switch events in test phases, return item (1-5).
-No significance tests (n = 3 per arm).
+No significance tests (small n).
+ROUNDS: round 1 = tutor v1 (10 Nov), round 2 = tutor v2 (from 11 Nov, V2_FROM). The primary decision is
+  round 2; round 1 and the pooled result are reported separately (deviation 3).
 """
 import argparse
 import csv
@@ -27,6 +29,9 @@ from pathlib import Path
 PRIMARY_PRE = [f"P{i}" for i in range(1, 7)]
 PRIMARY_HELD = [f"H{i}" for i in range(1, 7)]
 FAR = ["H7", "H8"]
+# Tutor v2 (deviation 3) was deployed between the sessions of 10 Nov and 11 Nov. A pair belongs to round 2
+# when its TUTOR learner practised after this moment; the baseline arm did not change.
+V2_FROM = "2026-11-11T00:00:00+00:00"
 
 
 def ts(s):
@@ -92,8 +97,13 @@ def main():
         focus_practice = sum(1 for e in hidden if e["payload"].get("phase") == "practice")
         surv = next((s["value"] for s in d["survey"] if s["learner_id"] == lid), None)
         llm_help = [h for h in real_help if h["source"].removesuffix("_error") in ("llm", "llm_retry", "fallback")]
+        # when they started practice: first practice question opened (or first run)
+        starts = [ts(v["first_seen"]) for q, v in views.items() if q in practice_ids and v.get("first_seen")]
+        starts += [ts(x["created_at"]) for x in runs]
+        first_run = min(starts, default=None)
+        own_round = None if first_run is None else (2 if first_run >= ts(V2_FROM) else 1)
         rows.append({
-            "learner": f"L{i}", "arm": l["arm"], "pair": l["pair_no"],
+            "learner": f"L{i}", "arm": l["arm"], "pair": l["pair_no"], "_own_round": own_round,
             "pre_correct_6": pre6 if pre_ok else None,
             "held_correct_6": held6 if held_ok else None,
             "gain_pts": (100 * held6 / 6 - 100 * pre6 / 6) if (pre_ok and held_ok) else None,
@@ -124,6 +134,16 @@ def main():
             assert r["arm"] not in pairs[r["pair"]], f"pair {r['pair']} has two {r['arm']} learners"
             pairs[r["pair"]][r["arm"]] = r
 
+    for r in rows:
+        # a pair's round = when its TUTOR practised; if the tutor never practised, when the partner did
+        members = pairs.get(r["pair"], {}) if r["pair"] is not None else {"x": r}
+        t = members.get("tutor")
+        rounds = [t["_own_round"]] if t and t["_own_round"] else []
+        rounds += [m["_own_round"] for m in members.values() if m["_own_round"]]
+        r["round"] = rounds[0] if rounds else 1
+    for r in rows:
+        r.pop("_own_round")
+
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     with open(out / "results.csv", "w", newline="") as f:
@@ -136,7 +156,7 @@ def main():
 
     md = ["# Removal test results", "",
           ("DRY RUN INCLUDING PILOTS — not a result." if a.include_pilots else
-           "Raw numbers per learner, pilot excluded, no significance claims (n = 3 per arm)."), "",
+           "Raw numbers per learner, pilots excluded, no significance claims (small n)."), "",
           "| " + " | ".join(rows[0].keys()) + " |", "|" + "---|" * len(rows[0])]
     md += ["| " + " | ".join(fmt(v) for v in r.values()) + " |" for r in rows]
     keys = ["pre_correct_6", "held_correct_6", "gain_pts", "held_correct_8", "far_correct_2",
@@ -146,36 +166,44 @@ def main():
         t, b = arm_vals("tutor", k), arm_vals("baseline", k)
         md.append(f"| {k} | {fmt(mean(t))} ({len(t)}) | {fmt(mean(b))} ({len(b)}) |")
 
-    md += ["", "## Within-pair gain (tutor − baseline, points)"]
-    wins = losses = complete = 0
-    for p in sorted(pairs):
-        t, b = pairs[p].get("tutor"), pairs[p].get("baseline")
-        if t and b and t["gain_pts"] is not None and b["gain_pts"] is not None:
-            diff = t["gain_pts"] - b["gain_pts"]
-            complete += 1
-            wins += diff > 0
-            losses += diff < 0
-            md.append(f"- pair {p}: {diff:+.1f}")
-        else:
-            md.append(f"- pair {p}: incomplete")
+    def decision(sub, title):
+        sub_pairs = {p: v for p, v in pairs.items() if any(r is x for x in sub for r in v.values())}
+        vals = lambda arm, key: [r[key] for r in sub if r["arm"] == arm and r[key] is not None]
+        lines = ["", f"## {title}", f"n: tutor {len(vals('tutor', 'arm'))}, baseline {len(vals('baseline', 'arm'))}",
+                 "", "Within-pair gain (tutor − baseline, points):"]
+        wins = losses = complete = 0
+        for p in sorted(sub_pairs):
+            t, b = sub_pairs[p].get("tutor"), sub_pairs[p].get("baseline")
+            if t and b and t["gain_pts"] is not None and b["gain_pts"] is not None:
+                diff = t["gain_pts"] - b["gain_pts"]
+                complete += 1
+                wins += diff > 0
+                losses += diff < 0
+                lines.append(f"- pair {p}: {diff:+.1f}")
+            else:
+                lines.append(f"- pair {p}: incomplete")
+        tg, bg = mean(vals("tutor", "gain_pts")), mean(vals("baseline", "gain_pts"))
+        ts_, bs = mean(vals("tutor", "practice_solved_8")), mean(vals("baseline", "practice_solved_8"))
+        # pre-registered: at least two-thirds of the complete pairs (rounded up), and never fewer than 2
+        need = max(2, -(-2 * complete // 3))
+        verdict = "inconclusive"
+        if tg is not None and bg is not None:
+            if tg - bg >= 100 / 6 - 1e-9 and wins >= need:
+                verdict = "SUPPORTED (pre-registered rule)"
+            elif bg - tg >= 100 / 6 - 1e-9 and losses >= need:
+                verdict = "FALSIFIED (pre-registered rule)"
+        collapse = (ts_ is not None and bs and ts_ < 0.75 * bs)
+        lines += [f"- mean gain: tutor {fmt(tg)} vs baseline {fmt(bg)} (difference "
+                  f"{fmt(None if tg is None or bg is None else tg - bg)} pts; threshold one item = 16.67)",
+                  f"- pairs favouring tutor: {wins}, favouring baseline: {losses} (of {complete} complete pairs; {need} needed)",
+                  f"- hypothesis on retention: **{verdict}**",
+                  f"- practice completion: tutor {fmt(ts_)} vs baseline {fmt(bs)} -> "
+                  f"{'**COLLAPSED** (< 0.75 x baseline)' if collapse else 'not collapsed'}"]
+        return lines
 
-    tg, bg = mean(arm_vals("tutor", "gain_pts")), mean(arm_vals("baseline", "gain_pts"))
-    ts_, bs = mean(arm_vals("tutor", "practice_solved_8")), mean(arm_vals("baseline", "practice_solved_8"))
-    # pre-registered: at least two-thirds of the complete pairs (rounded up), and never fewer than 2
-    need = max(2, -(-2 * complete // 3))
-    verdict = "inconclusive"
-    if tg is not None and bg is not None:
-        if tg - bg >= 100 / 6 - 1e-9 and wins >= need:
-            verdict = "SUPPORTED (pre-registered rule)"
-        elif bg - tg >= 100 / 6 - 1e-9 and losses >= need:
-            verdict = "FALSIFIED (pre-registered rule)"
-    collapse = (ts_ is not None and bs and ts_ < 0.75 * bs)
-    md += ["", "## Pre-registered decision",
-           f"- mean gain: tutor {fmt(tg)} vs baseline {fmt(bg)} (difference {fmt(None if tg is None or bg is None else tg - bg)} pts; threshold 16.7)",
-           f"- pairs favouring tutor: {wins}, favouring baseline: {losses} (of {complete} complete pairs; {need} needed)",
-           f"- hypothesis on retention: **{verdict}**",
-           f"- practice completion: tutor {fmt(ts_)} vs baseline {fmt(bs)} -> "
-           f"{'**COLLAPSED** (< 0.75 x baseline)' if collapse else 'not collapsed'}"]
+    md += decision([r for r in rows if r["round"] == 2], "PRIMARY: round 2 (tutor v2 vs baseline), pre-registered decision")
+    md += decision([r for r in rows if r["round"] == 1], "Round 1 (tutor v1 vs baseline), reported separately")
+    md += decision(rows, "All rounds pooled (secondary)")
     md += ["", "## LLM fallback share per arm (pre-registered deviation if > 20%)"]
     for arm in ("tutor", "baseline"):
         # LLM-eligible replies only: ladder hints and baseline answers (not gates, repeats, reveals)

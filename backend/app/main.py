@@ -25,7 +25,7 @@ from . import db
 from .assistant import SCHEMA_NOTES, baseline_answer, tutor_hint
 from .config import settings
 from .grader import compare, describe
-from .policy import REVEAL_LEVEL, closeness, decide, reveal_available
+from .policy import REPEAT_MSG, REVEAL_LEVEL, Decision, closeness, decide, reveal_available
 from .sandbox import MAX_DISPLAY, InfraError, SandboxError, run_query
 
 QUESTIONS = {q["id"]: q for q in json.loads(settings.questions_json.read_text())}
@@ -267,6 +267,7 @@ def run(qid: str, body: SqlIn, L=Depends(learner)):
                      finished_at = COALESCE(finished_at, now())
                      WHERE learner_id=%s AND question_id=%s""", (L["learner_id"], qid))
         out["reveal_available"] = False if ok else _can_reveal(L, _help_state(L, q))
+        out["needs_run"] = False
     return out
 
 
@@ -342,9 +343,16 @@ def _help_state(L, q):
                             AND question_id=%s AND kind='run' ORDER BY created_at DESC LIMIT 1""", (lid, qid))
     revealed = bool(db.q1("SELECT 1 FROM app.hints WHERE learner_id=%s AND question_id=%s AND source='reveal'",
                           (lid, qid)))
+    # Get help is locked after any real help (gate, hint, error explanation, answer) until a new run
+    needs_run = bool(db.q1(
+        """SELECT 1 FROM app.hints h WHERE h.learner_id=%s AND h.question_id=%s
+             AND (h.level BETWEEN 0 AND 4 OR h.level = 9)
+             AND NOT EXISTS (SELECT 1 FROM app.attempts a WHERE a.learner_id=h.learner_id
+                             AND a.question_id=h.question_id AND a.kind='run' AND a.created_at > h.created_at)
+           LIMIT 1""", (lid, qid)))
     return dict(attempts=attempts, last=last, last_level=last_level, since=since,
                 fails_after_l4=fails_after_l4, last_attempt=last_attempt,
-                closeness=closeness(last_attempt), revealed=revealed)
+                closeness=closeness(last_attempt), revealed=revealed, needs_run=needs_run)
 
 
 def _can_reveal(L, st):
@@ -358,8 +366,9 @@ def hints(qid: str, L=Depends(learner)):
     q = question_for(L, qid)
     rows = db.q("SELECT text FROM app.hints WHERE learner_id=%s AND question_id=%s ORDER BY hint_id",
                 (L["learner_id"], qid))
-    can = _can_reveal(L, _help_state(L, q)) if L["arm"] in ("tutor", "baseline") else False
-    return {"hints": [{"text": h["text"]} for h in rows], "reveal_available": can}
+    st = _help_state(L, q) if L["arm"] in ("tutor", "baseline") else None
+    return {"hints": [{"text": h["text"]} for h in rows], "reveal_available": _can_reveal(L, st) if st else False,
+            "needs_run": st["needs_run"] if st else False}
 
 
 @app.post("/api/questions/{qid}/help")
@@ -375,10 +384,17 @@ def help_(qid: str, L=Depends(learner)):
     st = _help_state(L, q)
     d = decide(L["arm"], mastered, st["attempts"], st["since"], st["last_level"],
                st["closeness"], st["fails_after_l4"], hinted=st["last"] is not None)
+    if st["needs_run"] and d.action != "solved":
+        # same rule in both arms (the UI locks the button too): no new help without a new run
+        prev = db.q1("""SELECT text FROM app.hints WHERE learner_id=%s AND question_id=%s
+                        AND (level BETWEEN 0 AND 4 OR level = 9) ORDER BY created_at DESC, hint_id DESC LIMIT 1""",
+                     (lid, qid))
+        d = Decision("repeat", -1, message=REPEAT_MSG)
+        st = {**st, "last": prev}
     if d.action in ("gate", "solved"):
         r = dict(text=d.message, source=d.action, guard_blocked=0, model=None, latency_ms=0)
     elif d.action == "repeat":
-        r = dict(text=d.message + "\n\n" + st["last"]["text"], source="repeat",
+        r = dict(text=d.message + ("\n\n" + st["last"]["text"] if st["last"] else ""), source="repeat",
                  guard_blocked=0, model=None, latency_ms=0)
     elif d.action == "answer":
         r = baseline_answer(q, st["last_attempt"])
@@ -393,7 +409,7 @@ def help_(qid: str, L=Depends(learner)):
     for rj in r.get("rejects") or []:
         event("hint_reject", {"learner_id": lid, "qid": qid, "arm": L["arm"], "level": d.level, "mode": d.mode, **rj})
     st2 = _help_state(L, q)
-    return {"text": r["text"], "reveal_available": _can_reveal(L, st2)}
+    return {"text": r["text"], "reveal_available": _can_reveal(L, st2), "needs_run": st2["needs_run"]}
 
 
 @app.post("/api/questions/{qid}/reveal")
@@ -501,13 +517,13 @@ def assign_arms(_=Depends(admin)):
         scores = pretest_scores(c)
         rows = c.execute(LEARNER_LIST_SQL).fetchall()
         rows = [r for r in rows if not r["is_pilot"] and not r["excluded"] and r["arm"] is None]
+        # only learners who have FINISHED the pretest (all 6 submitted, or time up and blank-filled);
+        # everyone else (not started, still writing) is skipped and can be assigned by a later press
+        skipped = [r["display_name"] for r in rows if r["pretest_done"] < 6]
+        rows = [r for r in rows if r["pretest_done"] >= 6]
         if not rows:
-            raise HTTPException(400, "No unassigned learners (pilots and excluded learners are skipped)")
-        unfinished = [r["display_name"] for r in rows if r["pretest_done"] < 6]
-        if unfinished:
-            raise HTTPException(400, "Still in the pretest: " + ", ".join(unfinished)
-                                + ". Wait until 2 minutes after their time is up and press Assign again "
-                                "(unsubmitted answers are then recorded as blank), or exclude a no-show.")
+            raise HTTPException(400, "Nobody to assign: no unassigned learner has finished the pretest"
+                                + (f" (still to finish: {', '.join(skipped)})" if skipped else "") + ".")
         for r in rows:
             r["pretest_score"] = scores.get(r["learner_id"], 0)
         tiebreak = {r["learner_id"]: secrets.randbelow(10**9) for r in rows}
@@ -549,8 +565,16 @@ def assign_arms(_=Depends(admin)):
                 log.append({"pair": None, arm: odd["learner_id"], "scores": [odd["pretest_score"]], "unpaired": True})
         c.execute("INSERT INTO app.events (kind, payload) VALUES ('assign', %s)",
                   (db.J({"pairs": log, "tiebreak": {str(k): v for k, v in tiebreak.items()},
-                         "at": datetime.now(timezone.utc).isoformat()}),))
-    return log
+                         "skipped": skipped, "at": datetime.now(timezone.utc).isoformat()}),))
+        names = {r["learner_id"]: r["display_name"] for r in c.execute(
+            "SELECT learner_id, display_name FROM app.learners").fetchall()}
+    summary = []
+    for p_ in log:
+        who = ", ".join(f"{names.get(p_[a], p_[a])} → {a}" for a in ("tutor", "baseline") if a in p_)
+        summary.append((f"Pair {p_['pair']}: " if p_["pair"] else "Unpaired (waits for the next solo): ") + who)
+    if skipped:
+        summary.append("Not assigned yet (pretest not finished): " + ", ".join(skipped))
+    return {"pairs": log, "skipped": skipped, "summary": summary}
 
 
 class ArmIn(BaseModel):
@@ -584,6 +608,30 @@ def exclude(body: ExcludeIn, _=Depends(admin)):
                      (body.learner_id,)).rowcount != 1:
             raise HTTPException(404, "No such learner")
     event("exclude", {"learner_id": body.learner_id, "reason": body.reason})
+    return {"ok": True}
+
+
+class DeleteIn(BaseModel):
+    learner_id: int
+
+
+@app.post("/api/admin/delete")
+def delete_learner(body: DeleteIn, _=Depends(admin)):
+    """Remove a learner who never started (no arm, no runs, views, hints or survey). Anyone with data
+    must be excluded instead, so nothing that was recorded can disappear."""
+    with db.tx() as c:
+        row = c.execute("SELECT learner_id, display_name, arm, phase FROM app.learners WHERE learner_id=%s FOR UPDATE",
+                        (body.learner_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "No such learner")
+        has_data = row["arm"] is not None or row["phase"] != "waiting" or any(c.execute(
+            f"SELECT 1 FROM app.{t} WHERE learner_id=%s LIMIT 1", (body.learner_id,)).fetchone()
+            for t in ("attempts", "question_views", "hints", "survey"))
+        if has_data:
+            raise HTTPException(409, f"{row['display_name']} has started or has recorded data. Exclude them instead.")
+        c.execute("DELETE FROM app.learners WHERE learner_id=%s", (body.learner_id,))
+        c.execute("INSERT INTO app.events (kind, payload) VALUES ('delete', %s)",
+                  (db.J({"learner_id": body.learner_id, "never_started": True}),))
     return {"ok": True}
 
 

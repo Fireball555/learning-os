@@ -15,8 +15,15 @@ No LLM is involved in grading.
 **Smallest change to what the system says that would flip the result?**
 Showing the complete query. The leak guard exists exactly for this, because a full answer in any part of a tutor reply makes it the baseline arm. The L3 skeleton is the closest the tutor gets to that line.
 
+**Round 1 showed a smaller change than we expected: the error message channel.**
+- About half of all tutor help was SQL-error explanations.
+- Half of the AI-written ones fixed more than the error, for example `HAVING COUNT(…) = 0` on T3.
+- One sentence in an error hint can hand over the exact construct the question tests. So v2 caps *every* channel: a hint may use only what is already in the learner's own query or in the error message (`docs/llm-analysis-round1.md`).
+
 **How often can you afford the real test, and what do you steer by between runs?**
-Once (n = 6, 2 days apart). In between, we steer by proxies:
+We ran it in two rounds (round 1 on tutor v1, round 2 on tutor v2), with the final test 2 days after practice. Between runs, we steer by:
+- a hand-graded reading of every tutor reply against the learner's query at that moment. This is the most useful proxy we found;
+- replaying the real replies through the new rules before a change ships;
 - hint level reached;
 - questions solved before any help;
 - attempts per question;
@@ -28,6 +35,7 @@ These are proxies, and they are reported as such.
 **Which part of writing a query should the system make harder on purpose, and which should it hand over?**
 - **Harder:** choosing the tables and join, and the trap (LEFT vs INNER, fan-out, anti-join). That is the skill being tested.
 - **Handed over completely:** the schema (always visible, with a join map), exact error messages, and the row and column feedback in practice. Syntax trivia is not the skill.
+- Round 1 showed where that line actually sits. Fixing a typo, an alias or a missing comma in the learner's *own* SQL is handing over syntax. Suggesting a construct they haven't used (HAVING, a subquery, a LEFT JOIN chain) is handing over the skill. v2 enforces this line in code.
 
 **The learner wants the answer at 11 pm. Who decides?**
 - **In this study:** the pre-registered policy decides, and the learner was told so.
