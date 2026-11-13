@@ -129,3 +129,11 @@ Held-out items are labelled near or far transfer in `question_bank.py`. H1–H6 
    - One learner joined 7 min late, and his practice clock was restarted by the invigilator, giving 45 min of actual practice.
    - One learner (baseline, pair 4) lost his connection after the pretest. He does practice on 11 Nov and the removal test on 13 Nov.
    - Five people created in advance did not show up. They were excluded, then deleted, never having started.
+5. **One round 2 tutor learner excluded after assignment (11 Nov).** He used an outside AI during practice: he solved 8/8 with no hints after scoring 0/6 on the pretest, with 14 tab switches. His data is reported, not analysed. His partner stays in the baseline mean, and the pair does not count toward the pair rule.
+6. **Every session was remote and unsupervised (10–13 Nov).** Learners were on holiday in different cities, so the pretest, practice and removal test were all taken from home, not in one room. The "sit apart" and "phones away" rules could not be enforced.
+   - Mitigations: tab switches are logged in every phase; every learner fills in a self-report (WhatsApp) before the removal test; and the rules are stated in writing ("only this tab, no AI, no notes").
+   - **Rule fixed before any removal-test score was seen (13 Nov, 13:50 IST):**
+     - A learner who reports outside help during the removal test is analysed in a separate sensitivity block, not the primary one. So is a learner with **more than 3 tab-hidden events during the removal test**.
+     - The primary result is reported both with and without them.
+   - The self-report answers (practice since, AI use) are reported per learner.
+
