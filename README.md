@@ -1,30 +1,49 @@
-# Learning OS: Assisted Independence
+# Learning OS 🧠
 
-**Does an AI tutor that holds back help make learners better at SQL once the AI is switched off?**
+**An SQL tutor that refuses to give you the answer, tested with the AI switched off.**
 
-When a learner pastes a question into a chatbot, they get the full query in four seconds, and six weeks later they can't start one alone. This project tests the alternative. An adaptive SQL tutor caps how much it reveals, based on what each learner has already shown they can do unaided. Then a **removal test** checks what they can do with the assistant gone, compared against learners who used an ordinary answer-giving assistant.
+Chatbots write a query in four seconds, and the skill quietly disappears. Learning OS holds back help on purpose: it points at your mistake instead of fixing it. Then it checks what you can do on your own, days later, with no AI at all.
 
-> 100xEngineers C7 Capstone · Module 3 · Learning OS brief
-> Status: complete. Round 1 ran on 10 Nov (tutor v1), round 2 on 11 Nov (tutor v2), and the removal test on 13–14 Nov. The primary result was falsified; see Results. Results go in `results/` and the case study.
+**Live:** [learning-os-uon2.onrender.com](https://learning-os-uon2.onrender.com) · 100xEngineers C7 Capstone, Module 3
 
 ---
 
-## The experiment
+## Result
 
-| | |
+14 real learners (13 analysed; 1 excluded for using ChatGPT). Tutor vs an answer-giving assistant. A held-out test 2–4 days later, with the AI off.
+
+**Pre-registered rule:** the tutor wins if its mean gain beats baseline by at least 1 question **and** it wins at least ⅔ of the matched pairs. The mirror image is *falsified*; anything else is *inconclusive*.
+
+| | Tutor | Answer-giver | Verdict |
+|---|---|---|---|
+| Round 2 (tutor v2, primary) | +0.0 | +1.7 | ❌ Falsified |
+| Round 1 (tutor v1) | **+2.0** | +0.25 | ✅ Supported |
+| Pooled | +1.3 | +0.9 | Inconclusive |
+
+*Gain = questions correct on the final test minus the pretest, out of 6.*
+
+**Takeaway:** holding back answers helped learners who could *start* a query, and failed those who couldn't. **Withholding needs a floor.** Tutor practice completion also collapsed (4.5 vs 6.4 of 8 solved).
+
+**How the evidence changed the hypothesis**
+
+| v1 (before) | v2 (after) |
 |---|---|
-| **Hypothesis (v1)** | Help capped at what the learner can already do unaided leads to higher scores on held-out multi-table questions, with no assistant, than an assistant that gives the full query on request. Practice completion stays comparable. |
-| **Learners** | At least 6 people (about 9 expected), none on the team, who know SELECT/WHERE/GROUP BY but have not been taught joins. Pilot runs are excluded from results. |
-| **Arms** | **Tutor**: a hint ladder that never gives the query. **Baseline**: the full correct query on every request. Same app, model, UI and button. |
-| **Assignment** | Rank by pretest score, pair neighbours, then a coin flip inside each pair. |
-| **Sessions** | Pretest 15 min, then practice 45 min, then (2 days later) removal test 30 min. All three are timed by the server. |
-| **Primary metric** | Skill-matched gain: (held-out H1–H6 correct ÷ 6) − (pretest P1–P6 correct ÷ 6). |
-| **Decision rule** | **Supported**: the tutor mean gain is at least 1 question higher than baseline, **and** the tutor learner wins in at least two-thirds of the pairs. The mirror image is **falsified**; anything else is inconclusive. |
-| **Collapse check** | Tutor practice completion below 0.75 × baseline means completion has collapsed. |
+| Capping help improves unaided performance | It does, **for learners at the edge of a skill**. Below that edge, show a worked example first |
+| Cap the hint button | Cap **every** channel: half the leaks came through SQL-error explanations |
+| (unstated) | A hint may only use what is already in the learner's own query or error |
 
-Full pre-registration: [`docs/preregistration.md`](docs/preregistration.md). Session procedure: [`docs/runbook.md`](docs/runbook.md).
+![Gain by round](results/gain_by_round.png)
+
+---
 
 ## How it works
+
+1. **Pretest (15 min):** 6 join questions, no help.
+2. **Practice (45 min):** 8 questions with a **Get help** button.
+   - **Tutor arm:** a 4-step hint ladder (point at the problem → explain the idea → skeleton with blanks → exact fix). It never gives the full query.
+   - **Baseline arm:** the full correct query, like ChatGPT.
+3. **Final test (30 min, 2+ days later):** 8 new questions, **no help at all**.
+4. Everything is graded by the result set, against a real Postgres database.
 
 ```mermaid
 flowchart LR
@@ -40,102 +59,61 @@ flowchart LR
   I["Invigilator console"] --> API
 ```
 
-| Part | Kind | Where |
+**Rules decide how much help you get; the LLM only phrases it.**
+
+| Part | Kind | Job |
 |---|---|---|
-| Grading (result-set equality, columns by position, values normalised) | Deterministic | `backend/app/grader.py` |
-| SQL sandbox: read-only role, one SELECT, server-side cursor, row/byte/time caps | Deterministic | `backend/app/sandbox.py` |
-| Help-level policy: mastery + attempts → level | Deterministic | `backend/app/policy.py` |
-| Leak guard: block any reply whose SQL returns the right answer or copies the reference | Deterministic | `backend/app/assistant.py` |
-| Phrasing the hint at the chosen level (Groq; fallback chain of models on rate limits) | **Probabilistic (LLM)** | `backend/app/assistant.py` |
-| Running sessions, invigilating, observations | **Human** | `/admin` console |
+| Grader, SQL sandbox, timers | Deterministic | Result-set grading; one read-only SELECT; the server-side clock |
+| Help policy + leak guard | Deterministic | Chooses the hint level; blocks any reply whose SQL produces the answer |
+| Hint wording | Probabilistic (LLM) | Groq phrases the hint at that level; a built-in hint if it fails |
+| Sessions, pairing, invigilation | Human | Starts phases, coin-flip assignment, exclusions, export |
 
-**The tutor ladder:**
-- **L1 symptom:** a question about what is wrong with their result. Names no SQL feature, table or column.
-- **L2 concept:** explains the idea behind the fix, in words.
-- **L3 skeleton:** one sentence plus the solution's shape with `___` blanks (made by code, never runs).
-- **L4 fix:** the exact change to the learner's own attempt, as a fragment.
+---
 
-**Tutor v2 (from 11 Nov, after round 1):** a hint may use anything already in the learner's own query or the error message, and may never introduce a new SQL feature or new code before L2. Get help unlocks again only after a new run. See [`docs/llm-analysis-round1.md`](docs/llm-analysis-round1.md).
+## Features
 
-**How the ladder moves (policy v3):** every hint is about the learner's own latest query. The rules look at how close it is, as measured by the grader:
-- SQL error: explain the error. This doesn't use up a rung.
-- Close (right rows, only the columns or order wrong): straight to L4. A `SELECT *` on the wrong rows is not close.
-- A few rows off: up two levels. This is often the concept itself, such as an inner join where a left join is needed.
-- Far: one step up per new attempt.
+- ⏱️ Server-enforced timers with auto-submit
+- 🪜 Help level chosen by how close your last attempt was, not by how often you click
+- 🛡️ Read-only SQL sandbox (one SELECT, 3 s cap, row limits)
+- 🎲 Fair assignment: pairs matched on pretest score, then a coin flip
+- 🧑‍🏫 Invigilator console: phases, arms, live stats, one-click export
+- 🌗 Light and dark mode
 
-If the learner has already shown a skill unaided, they must try once first. Asking again without trying repeats the last hint. After L4 and 2 more failed runs, the learner may choose **Show solution**, which is logged, and that question then doesn't count as solved.
+## Tech stack
 
-**Rules enforced on the server, not the UI:**
-- A learner only ever receives the questions of their current phase.
-- `/help` doesn't exist outside practice: it returns 404.
-- The arm is never sent to or from the browser.
-- Test phases never reveal whether an answer is correct.
-- A database outage is never recorded as a wrong answer.
+| Layer | Tech |
+|---|---|
+| Frontend | React, Vite, Tailwind, CodeMirror |
+| Backend | FastAPI (Python) |
+| Database | Supabase Postgres |
+| LLM | Groq: gpt-oss-120b (+2 fallback models) |
+| Hosting | Render |
+| Tests | pytest (72 tests) |
 
-## Repository map
-```
-backend/app/
-  main.py            API: phases, timer, run/submit/help, admin, export
-  question_bank.py   22 questions (6 pretest / 8 practice / 8 held-out), the single source of truth
-  questions.json     frozen expected result sets (scripts/build_questions.py)
-  grader.py  sandbox.py  policy.py  assistant.py  db.py  config.py
-backend/tests/       71 tests: grader, policy, sandbox security, 30 trap/alternative queries,
-                     full study flow, races, outages, timer, leak guard
-frontend/            React + Vite + Tailwind + CodeMirror (dist/ is committed and served by FastAPI)
-db/                  schema, deterministic seed generator, app tables + read-only role
-scripts/             reset_db.sh, build_questions.py, analyze.py
-docs/                preregistration.md, runbook.md, hypothesis-log.md, viva-notes.md,
-                     llm-analysis-round1.md, evidence-checklist.md
-```
+## The experiment, in the open
 
-## Run it
+- [`docs/preregistration.md`](docs/preregistration.md): the decision rule, published before the results, plus every deviation
+- [`docs/hypothesis-log.md`](docs/hypothesis-log.md): how the evidence changed the hypothesis (v1 → v2)
+- [`docs/llm-analysis-round1.md`](docs/llm-analysis-round1.md): every tutor reply, graded by hand
+- [`results/`](results/): anonymised scores per learner
 
-**Requirements:** Python 3.12+, `psql` (`sudo apt install postgresql-client`), a Supabase project, and a Groq API key.
+## Limitations
+
+- Small n (2 matched pairs in the primary test), so this is a direction, not proof.
+- The two rounds differ in tutor version, learner level and test timing.
+- All sessions ran remotely and unsupervised. Tab switches were logged, and a pre-registered rule handles them; it changes no verdict.
+- A 2–4 day gap measures short-term retention, not 6 weeks.
+
+## Run it locally
 
 ```bash
-cp .env.example .env               # 2 DB URLs (Session/Transaction pooler), ADMIN_TOKEN, GROQ_API_KEY
+cp .env.example .env                 # Supabase URLs, ADMIN_TOKEN, GROQ_API_KEY
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-psql "$ADMIN_DATABASE_URL" -f db/03_app_and_roles.sql   # once; set the learner password first
-bash scripts/reset_db.sh           # shop schema + seed + frozen answers
-cd backend && python -m pytest -q
-uvicorn app.main:app --port 8000   # learner: http://localhost:8000   invigilator: /admin
+bash scripts/reset_db.sh             # schema + seed + answers
+cd backend && uvicorn app.main:app   # learner: /   invigilator: /admin
 ```
 
-**Supabase connection notes:**
-- Use the pooler URIs from **Connect**.
-- The learner role logs in as `learner_ro.<project-ref>`.
-- If the session pooler (port 5432) rejects the learner login, use the transaction pooler (port **6543**). The app supports it.
+---
 
-`ALLOW_WIPE=1 pytest` also runs the full-flow tests. **They wipe `app.*`, so never run them against the live study database.**
-
-**Deploy (Render):**
-1. New → Blueprint → this repo (`render.yaml`).
-2. Set `ADMIN_DATABASE_URL`, `LEARNER_DATABASE_URL`, `ADMIN_TOKEN` and `GROQ_API_KEY`.
-3. Open `/api/health`. It should show `"llm": true`.
-
-Auto-deploy is off, so a push never restarts a live session. The free plan sleeps after 15 minutes idle, so open the site 5 minutes before a session.
-
-**Frontend:** `cd frontend && npm ci && npm run build`, then commit `dist/`. There are six themes in `src/themes.js`; the study uses `ember`. Preview the others with `?theme=paper` etc.
-
-## Results
-13 learners took the removal test with the assistant switched off. Scored with the pre-registered rule (`scripts/analyze.py`), unchanged:
-
-| Block | Tutor gain | Baseline gain | Pairs | Verdict |
-|---|---|---|---|---|
-| **Round 2, tutor v2 (primary)** | 0.0 items | +1.7 | 0–2 | **Falsified** |
-| Round 1, tutor v1 | **+2.0** | +0.25 | 3–0, 1 tie | Supported |
-| Pooled | +1.3 | +0.9 | 3–2, 1 tie | Inconclusive |
-
-Tutor practice completion collapsed (4.5 vs 6.4 of 8). The tab-switch sensitivity check changes no verdict.
-
-**Hypothesis v2:** withholding answers helps learners at the edge of a skill, and fails those below it. They need a worked example first. Full results: [`results/results.md`](results/results.md). Evidence trail: [`docs/hypothesis-log.md`](docs/hypothesis-log.md), [`docs/llm-analysis-round1.md`](docs/llm-analysis-round1.md).
-
-![Gain by round](results/gain_by_round.png)
-
-## Integrity notes
-- The held-out questions are in this repo. It stays **private until the removal test is over**, and the `prereg` tag plus file hashes were sent to a third party before the pretest.
-- Learner names never leave the database. Exports use IDs, and `results/` is anonymised.
-
-## Author
-Ram Smaran H ([@Fireball555](https://github.com/Fireball555)), solo build.
+Built by **Ram Smaran H** ([@Fireball555](https://github.com/Fireball555))
