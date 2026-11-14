@@ -28,16 +28,16 @@ Full pre-registration: [`docs/preregistration.md`](docs/preregistration.md). Ses
 
 ```mermaid
 flowchart LR
-  L[Learner] -->|writes SQL| UI[React app]
-  UI -->|run or submit| API[FastAPI]
-  API -->|one SELECT, read-only role, 3 s cap| SB[(Supabase shop schema)]
-  SB --> GR[Grader: result-set equality]
-  UI -->|Get help, practice only| POL[Help policy: rule-based]
-  POL -->|level 1 to 4| LLM[Groq LLM phrases the hint]
-  LLM --> G[Leak guard runs any SQL in the reply]
-  G -->|safe hint, or deterministic fallback| UI
-  API --> LOG[(app schema: attempts, hints, events)]
-  I[Invigilator console] --> API
+  L["Learner"] -->|"writes SQL"| UI["React app"]
+  UI -->|"run or submit"| API["FastAPI"]
+  API -->|"one SELECT, read-only, 3 s cap"| SB[("Supabase shop schema")]
+  SB --> GR["Grader: result-set equality"]
+  UI -->|"Get help, practice only"| POL["Help policy: rules"]
+  POL -->|"level 1 to 4"| LLM["Groq LLM phrases the hint"]
+  LLM --> G["Leak guard + level rules"]
+  G -->|"safe hint or built-in hint"| UI
+  API --> LOG[("app schema: attempts, hints, events")]
+  I["Invigilator console"] --> API
 ```
 
 | Part | Kind | Where |
