@@ -44,5 +44,26 @@ For learners who already know single-table SQL, an assistant that caps how much 
 - **Change → tutor v2:** the rule "may use only what is in the learner's own query or the error" (Deviation 3). Round 2 (11 Nov) is the primary test.
 - **What this means for the hypothesis:** "capping how much it reveals" only works if *every* channel is capped. Error help turned out to be the main channel, not a side channel.
 
-## After the removal test (13 Nov) → v2
-_Fill in: the result under the pre-registered rule, then v2 of the hypothesis and the specific evidence (per-learner numbers, hint logs, observations) behind every word that changed._
+## After the removal test (13–14 Nov) → v2
+**The result under the pre-registered rule** (`results/results.md`):
+
+| Block | Tutor gain | Baseline gain | Pairs | Verdict |
+|---|---|---|---|---|
+| Round 2, tutor v2 (primary) | 0.0 items | +1.7 | 0–2 | **Falsified** |
+| Round 1, tutor v1 | +2.0 | +0.25 | 3–0, 1 tie | Supported |
+| Pooled | +1.3 | +0.9 | 3–2, 1 tie | Inconclusive |
+
+- Practice completion collapsed (4.5 vs 6.4 of 8).
+- The tab-switch sensitivity check changes no verdict.
+
+**v2:**
+> For learners at the edge of a skill (they can start a query but not finish it), an assistant that withholds the answer, and gives help only about the learner's own attempt through every channel (error messages included), improves unaided performance later. For learners below that edge, withholding alone fails: completion collapses and they gain nothing. They first need the skill shown on a different worked example.
+
+**The evidence behind each change:**
+- **"At the edge":** every round 1 tutor learner gained +2 items; the round 2 tutor learners (pretest 0–1/6, 2–3 practice questions solved) gained 0. A learner who couldn't write a JOIN spent 36 minutes on one question.
+- **"Every channel":** half of all round 1 help was error explanations, and half of the AI-written ones handed over the construct being tested (`docs/llm-analysis-round1.md`).
+- **"About the learner's own attempt":** the AI's diagnosis was right in 11 of 12 replies that saw a real attempt. The generic built-in hints were the worst replies.
+- **"Worked example first":** no hint in either round taught syntax the learner had never seen. Fan-out (`COUNT(DISTINCT)`) was never shown to any tutor learner, and none solved T4.
+- **Copying is not learning:** two round 1 baseline learners finished practice 8/8 (one in 7 minutes) and then scored −1 item against their pretest.
+
+**Caveat:** the rounds differ in tutor version, learner level and test timing, and n = 13. This is a direction, not proof.

@@ -5,7 +5,7 @@
 When a learner pastes a question into a chatbot, they get the full query in four seconds, and six weeks later they can't start one alone. This project tests the alternative. An adaptive SQL tutor caps how much it reveals, based on what each learner has already shown they can do unaided. Then a **removal test** checks what they can do with the assistant gone, compared against learners who used an ordinary answer-giving assistant.
 
 > 100xEngineers C7 Capstone · Module 3 · Learning OS brief
-> Status: round 1 ran on 10 Nov (tutor v1), round 2 on 11 Nov (tutor v2), and the removal test is on 13 Nov. Results go in `results/` and the case study.
+> Status: complete. Round 1 ran on 10 Nov (tutor v1), round 2 on 11 Nov (tutor v2), and the removal test on 13–14 Nov. The primary result was falsified; see Results. Results go in `results/` and the case study.
 
 ---
 
@@ -119,7 +119,19 @@ Auto-deploy is off, so a push never restarts a live session. The free plan sleep
 **Frontend:** `cd frontend && npm ci && npm run build`, then commit `dist/`. There are six themes in `src/themes.js`; the study uses `ember`. Preview the others with `?theme=paper` etc.
 
 ## Results
-_To be filled after 13 Nov from `python scripts/analyze.py export.json --out results/`. Every learner's raw numbers are reported, including null or negative results._
+13 learners took the removal test with the assistant switched off. Scored with the pre-registered rule (`scripts/analyze.py`), unchanged:
+
+| Block | Tutor gain | Baseline gain | Pairs | Verdict |
+|---|---|---|---|---|
+| **Round 2, tutor v2 (primary)** | 0.0 items | +1.7 | 0–2 | **Falsified** |
+| Round 1, tutor v1 | **+2.0** | +0.25 | 3–0, 1 tie | Supported |
+| Pooled | +1.3 | +0.9 | 3–2, 1 tie | Inconclusive |
+
+Tutor practice completion collapsed (4.5 vs 6.4 of 8). The tab-switch sensitivity check changes no verdict.
+
+**Hypothesis v2:** withholding answers helps learners at the edge of a skill, and fails those below it. They need a worked example first. Full results: [`results/results.md`](results/results.md). Evidence trail: [`docs/hypothesis-log.md`](docs/hypothesis-log.md), [`docs/llm-analysis-round1.md`](docs/llm-analysis-round1.md).
+
+![Gain by round](results/gain_by_round.png)
 
 ## Integrity notes
 - The held-out questions are in this repo. It stays **private until the removal test is over**, and the `prereg` tag plus file hashes were sent to a third party before the pretest.

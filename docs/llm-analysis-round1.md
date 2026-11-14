@@ -42,7 +42,7 @@ Every reply was then replayed through the v2 rules (`scripts/replay` in the sess
 **Finding 2: when the AI looks at a real attempt, its diagnosis is good.** It was correct in 11 of 12 cases at L1/L2/L4.
 
 **Finding 3: the leaks came through the error channel.** Half of the AI error explanations solved more than the error:
-- T3 (learner 11): `HAVING COUNT(o.order_id) = 0`, which is the core of the question. *This is Praneeth's complaint.*
+- T3 (learner 11): `HAVING COUNT(o.order_id) = 0`, which is the core of the question. *This matches one learner's complaint, "it gives part of the code directly".*
 - T4 (learner 14): "move it to HAVING or wrap in a subquery", plus code.
 - T2 (learner 14): rewrote his `SUM(SELECT …)` into the correct correlated subquery.
 - T4 (learner 2): a timeout explained by giving every join condition. That's L4-level help, given at L1.
@@ -51,7 +51,7 @@ Every reply was then replayed through the v2 rules (`scripts/replay` in the sess
 
 **Finding 4: the built-in fallbacks were the worst replies.**
 - Every one of the 6 was generic ("read it word by word"), or wrong for that query: on learner 14's T4, "counts bigger after your joins?" when he had no joins at all.
-- Two of them only appeared because the v1 rules rejected *accurate* AI replies, one for naming `unit_price` and one for saying "subquery" to a learner who was already using a subquery. *This is Ashish's complaint.*
+- Two of them only appeared because the v1 rules rejected *accurate* AI replies, one for naming `unit_price` and one for saying "subquery" to a learner who was already using a subquery. *This matches another learner's complaint, "it can't locate my problem".*
 
 **Finding 5: a third of the L1 hints came before any attempt.** Learners asked for help before running anything, and they got a restatement of the question.
 

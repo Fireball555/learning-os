@@ -136,4 +136,5 @@ Held-out items are labelled near or far transfer in `question_bank.py`. H1–H6 
      - A learner who reports outside help during the removal test is analysed in a separate sensitivity block, not the primary one. So is a learner with **more than 3 tab-hidden events during the removal test**.
      - The primary result is reported both with and without them.
    - The self-report answers (practice since, AI use) are reported per learner.
+7. **Four learners took the removal test on 14 Nov, 3-4 days after practice instead of 2.** Three were tutor learners from round 1 and one was a baseline learner. They were unavailable on 13 Nov. A longer gap means more forgetting, which works slightly against the tutor arm. They are analysed as pre-registered, with no adjustment.
 
